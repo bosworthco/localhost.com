@@ -262,7 +262,7 @@ catch(err) {
 
 ;
           if (!runningTests) {
-            require("localhost4200/app")["default"].create({"name":"localhost4200","version":"0.0.0+11b2f26e"});
+            require("localhost4200/app")["default"].create({"name":"localhost4200","version":"0.0.0+1d1d29c9"});
           }
         
 //# sourceMappingURL=localhost4200.map

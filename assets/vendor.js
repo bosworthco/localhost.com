@@ -340,7 +340,7 @@ var runningTests = false;
   }
 })(this);
 ;/*!
- * jQuery JavaScript Library v3.3.1
+ * jQuery JavaScript Library v3.4.1
  * https://jquery.com/
  *
  * Includes Sizzle.js
@@ -350,7 +350,7 @@ var runningTests = false;
  * Released under the MIT license
  * https://jquery.org/license
  *
- * Date: 2018-01-20T17:24Z
+ * Date: 2019-05-01T21:04Z
  */
 ( function( global, factory ) {
 
@@ -432,20 +432,33 @@ var isWindow = function isWindow( obj ) {
 	var preservedScriptAttributes = {
 		type: true,
 		src: true,
+		nonce: true,
 		noModule: true
 	};
 
-	function DOMEval( code, doc, node ) {
+	function DOMEval( code, node, doc ) {
 		doc = doc || document;
 
-		var i,
+		var i, val,
 			script = doc.createElement( "script" );
 
 		script.text = code;
 		if ( node ) {
 			for ( i in preservedScriptAttributes ) {
-				if ( node[ i ] ) {
-					script[ i ] = node[ i ];
+
+				// Support: Firefox 64+, Edge 18+
+				// Some browsers don't support the "nonce" property on scripts.
+				// On the other hand, just using `getAttribute` is not enough as
+				// the `nonce` attribute is reset to an empty string whenever it
+				// becomes browsing-context connected.
+				// See https://github.com/whatwg/html/issues/2369
+				// See https://html.spec.whatwg.org/#nonce-attributes
+				// The `node.getAttribute` check was added for the sake of
+				// `jQuery.globalEval` so that it can fake a nonce-containing node
+				// via an object.
+				val = node[ i ] || node.getAttribute && node.getAttribute( i );
+				if ( val ) {
+					script.setAttribute( i, val );
 				}
 			}
 		}
@@ -470,7 +483,7 @@ function toType( obj ) {
 
 
 var
-	version = "3.3.1",
+	version = "3.4.1",
 
 	// Define a local copy of jQuery
 	jQuery = function( selector, context ) {
@@ -599,25 +612,28 @@ jQuery.extend = jQuery.fn.extend = function() {
 
 			// Extend the base object
 			for ( name in options ) {
-				src = target[ name ];
 				copy = options[ name ];
 
+				// Prevent Object.prototype pollution
 				// Prevent never-ending loop
-				if ( target === copy ) {
+				if ( name === "__proto__" || target === copy ) {
 					continue;
 				}
 
 				// Recurse if we're merging plain objects or arrays
 				if ( deep && copy && ( jQuery.isPlainObject( copy ) ||
 					( copyIsArray = Array.isArray( copy ) ) ) ) {
+					src = target[ name ];
 
-					if ( copyIsArray ) {
-						copyIsArray = false;
-						clone = src && Array.isArray( src ) ? src : [];
-
+					// Ensure proper type for the source value
+					if ( copyIsArray && !Array.isArray( src ) ) {
+						clone = [];
+					} else if ( !copyIsArray && !jQuery.isPlainObject( src ) ) {
+						clone = {};
 					} else {
-						clone = src && jQuery.isPlainObject( src ) ? src : {};
+						clone = src;
 					}
+					copyIsArray = false;
 
 					// Never move original objects, clone them
 					target[ name ] = jQuery.extend( deep, clone, copy );
@@ -670,9 +686,6 @@ jQuery.extend( {
 	},
 
 	isEmptyObject: function( obj ) {
-
-		/* eslint-disable no-unused-vars */
-		// See https://github.com/eslint/eslint/issues/6125
 		var name;
 
 		for ( name in obj ) {
@@ -682,8 +695,8 @@ jQuery.extend( {
 	},
 
 	// Evaluates a script in a global context
-	globalEval: function( code ) {
-		DOMEval( code );
+	globalEval: function( code, options ) {
+		DOMEval( code, { nonce: options && options.nonce } );
 	},
 
 	each: function( obj, callback ) {
@@ -839,14 +852,14 @@ function isArrayLike( obj ) {
 }
 var Sizzle =
 /*!
- * Sizzle CSS Selector Engine v2.3.3
+ * Sizzle CSS Selector Engine v2.3.4
  * https://sizzlejs.com/
  *
- * Copyright jQuery Foundation and other contributors
+ * Copyright JS Foundation and other contributors
  * Released under the MIT license
- * http://jquery.org/license
+ * https://js.foundation/
  *
- * Date: 2016-08-08
+ * Date: 2019-04-08
  */
 (function( window ) {
 
@@ -880,6 +893,7 @@ var i,
 	classCache = createCache(),
 	tokenCache = createCache(),
 	compilerCache = createCache(),
+	nonnativeSelectorCache = createCache(),
 	sortOrder = function( a, b ) {
 		if ( a === b ) {
 			hasDuplicate = true;
@@ -941,8 +955,7 @@ var i,
 
 	rcomma = new RegExp( "^" + whitespace + "*," + whitespace + "*" ),
 	rcombinators = new RegExp( "^" + whitespace + "*([>+~]|" + whitespace + ")" + whitespace + "*" ),
-
-	rattributeQuotes = new RegExp( "=" + whitespace + "*([^\\]'\"]*?)" + whitespace + "*\\]", "g" ),
+	rdescend = new RegExp( whitespace + "|>" ),
 
 	rpseudo = new RegExp( pseudos ),
 	ridentifier = new RegExp( "^" + identifier + "$" ),
@@ -963,6 +976,7 @@ var i,
 			whitespace + "*((?:-\\d)?\\d*)" + whitespace + "*\\)|)(?=[^-]|$)", "i" )
 	},
 
+	rhtml = /HTML$/i,
 	rinputs = /^(?:input|select|textarea|button)$/i,
 	rheader = /^h\d$/i,
 
@@ -1017,9 +1031,9 @@ var i,
 		setDocument();
 	},
 
-	disabledAncestor = addCombinator(
+	inDisabledFieldset = addCombinator(
 		function( elem ) {
-			return elem.disabled === true && ("form" in elem || "label" in elem);
+			return elem.disabled === true && elem.nodeName.toLowerCase() === "fieldset";
 		},
 		{ dir: "parentNode", next: "legend" }
 	);
@@ -1132,18 +1146,22 @@ function Sizzle( selector, context, results, seed ) {
 
 			// Take advantage of querySelectorAll
 			if ( support.qsa &&
-				!compilerCache[ selector + " " ] &&
-				(!rbuggyQSA || !rbuggyQSA.test( selector )) ) {
+				!nonnativeSelectorCache[ selector + " " ] &&
+				(!rbuggyQSA || !rbuggyQSA.test( selector )) &&
 
-				if ( nodeType !== 1 ) {
-					newContext = context;
-					newSelector = selector;
-
-				// qSA looks outside Element context, which is not what we want
-				// Thanks to Andrew Dupont for this workaround technique
-				// Support: IE <=8
+				// Support: IE 8 only
 				// Exclude object elements
-				} else if ( context.nodeName.toLowerCase() !== "object" ) {
+				(nodeType !== 1 || context.nodeName.toLowerCase() !== "object") ) {
+
+				newSelector = selector;
+				newContext = context;
+
+				// qSA considers elements outside a scoping root when evaluating child or
+				// descendant combinators, which is not what we want.
+				// In such cases, we work around the behavior by prefixing every selector in the
+				// list with an ID selector referencing the scope context.
+				// Thanks to Andrew Dupont for this technique.
+				if ( nodeType === 1 && rdescend.test( selector ) ) {
 
 					// Capture the context ID, setting it first if necessary
 					if ( (nid = context.getAttribute( "id" )) ) {
@@ -1165,17 +1183,16 @@ function Sizzle( selector, context, results, seed ) {
 						context;
 				}
 
-				if ( newSelector ) {
-					try {
-						push.apply( results,
-							newContext.querySelectorAll( newSelector )
-						);
-						return results;
-					} catch ( qsaError ) {
-					} finally {
-						if ( nid === expando ) {
-							context.removeAttribute( "id" );
-						}
+				try {
+					push.apply( results,
+						newContext.querySelectorAll( newSelector )
+					);
+					return results;
+				} catch ( qsaError ) {
+					nonnativeSelectorCache( selector, true );
+				} finally {
+					if ( nid === expando ) {
+						context.removeAttribute( "id" );
 					}
 				}
 			}
@@ -1339,7 +1356,7 @@ function createDisabledPseudo( disabled ) {
 					// Where there is no isDisabled, check manually
 					/* jshint -W018 */
 					elem.isDisabled !== !disabled &&
-						disabledAncestor( elem ) === disabled;
+						inDisabledFieldset( elem ) === disabled;
 			}
 
 			return elem.disabled === disabled;
@@ -1396,10 +1413,13 @@ support = Sizzle.support = {};
  * @returns {Boolean} True iff elem is a non-HTML XML node
  */
 isXML = Sizzle.isXML = function( elem ) {
-	// documentElement is verified for cases where it doesn't yet exist
-	// (such as loading iframes in IE - #4833)
-	var documentElement = elem && (elem.ownerDocument || elem).documentElement;
-	return documentElement ? documentElement.nodeName !== "HTML" : false;
+	var namespace = elem.namespaceURI,
+		docElem = (elem.ownerDocument || elem).documentElement;
+
+	// Support: IE <=8
+	// Assume HTML when documentElement doesn't yet exist, such as inside loading iframes
+	// https://bugs.jquery.com/ticket/4833
+	return !rhtml.test( namespace || docElem && docElem.nodeName || "HTML" );
 };
 
 /**
@@ -1821,11 +1841,8 @@ Sizzle.matchesSelector = function( elem, expr ) {
 		setDocument( elem );
 	}
 
-	// Make sure that attribute selectors are quoted
-	expr = expr.replace( rattributeQuotes, "='$1']" );
-
 	if ( support.matchesSelector && documentIsHTML &&
-		!compilerCache[ expr + " " ] &&
+		!nonnativeSelectorCache[ expr + " " ] &&
 		( !rbuggyMatches || !rbuggyMatches.test( expr ) ) &&
 		( !rbuggyQSA     || !rbuggyQSA.test( expr ) ) ) {
 
@@ -1839,7 +1856,9 @@ Sizzle.matchesSelector = function( elem, expr ) {
 					elem.document && elem.document.nodeType !== 11 ) {
 				return ret;
 			}
-		} catch (e) {}
+		} catch (e) {
+			nonnativeSelectorCache( expr, true );
+		}
 	}
 
 	return Sizzle( expr, document, null, [ elem ] ).length > 0;
@@ -2298,7 +2317,7 @@ Expr = Sizzle.selectors = {
 		"contains": markFunction(function( text ) {
 			text = text.replace( runescape, funescape );
 			return function( elem ) {
-				return ( elem.textContent || elem.innerText || getText( elem ) ).indexOf( text ) > -1;
+				return ( elem.textContent || getText( elem ) ).indexOf( text ) > -1;
 			};
 		}),
 
@@ -2437,7 +2456,11 @@ Expr = Sizzle.selectors = {
 		}),
 
 		"lt": createPositionalPseudo(function( matchIndexes, length, argument ) {
-			var i = argument < 0 ? argument + length : argument;
+			var i = argument < 0 ?
+				argument + length :
+				argument > length ?
+					length :
+					argument;
 			for ( ; --i >= 0; ) {
 				matchIndexes.push( i );
 			}
@@ -3487,18 +3510,18 @@ jQuery.each( {
 		return siblings( elem.firstChild );
 	},
 	contents: function( elem ) {
-        if ( nodeName( elem, "iframe" ) ) {
-            return elem.contentDocument;
-        }
+		if ( typeof elem.contentDocument !== "undefined" ) {
+			return elem.contentDocument;
+		}
 
-        // Support: IE 9 - 11 only, iOS 7 only, Android Browser <=4.3 only
-        // Treat the template element as a regular one in browsers that
-        // don't support it.
-        if ( nodeName( elem, "template" ) ) {
-            elem = elem.content || elem;
-        }
+		// Support: IE 9 - 11 only, iOS 7 only, Android Browser <=4.3 only
+		// Treat the template element as a regular one in browsers that
+		// don't support it.
+		if ( nodeName( elem, "template" ) ) {
+			elem = elem.content || elem;
+		}
 
-        return jQuery.merge( [], elem.childNodes );
+		return jQuery.merge( [], elem.childNodes );
 	}
 }, function( name, fn ) {
 	jQuery.fn[ name ] = function( until, selector ) {
@@ -4807,6 +4830,26 @@ var rcssNum = new RegExp( "^(?:([+-])=|)(" + pnum + ")([a-z%]*)$", "i" );
 
 var cssExpand = [ "Top", "Right", "Bottom", "Left" ];
 
+var documentElement = document.documentElement;
+
+
+
+	var isAttached = function( elem ) {
+			return jQuery.contains( elem.ownerDocument, elem );
+		},
+		composed = { composed: true };
+
+	// Support: IE 9 - 11+, Edge 12 - 18+, iOS 10.0 - 10.2 only
+	// Check attachment across shadow DOM boundaries when possible (gh-3504)
+	// Support: iOS 10.0-10.2 only
+	// Early iOS 10 versions support `attachShadow` but not `getRootNode`,
+	// leading to errors. We need to check for `getRootNode`.
+	if ( documentElement.getRootNode ) {
+		isAttached = function( elem ) {
+			return jQuery.contains( elem.ownerDocument, elem ) ||
+				elem.getRootNode( composed ) === elem.ownerDocument;
+		};
+	}
 var isHiddenWithinTree = function( elem, el ) {
 
 		// isHiddenWithinTree might be called from jQuery#filter function;
@@ -4821,7 +4864,7 @@ var isHiddenWithinTree = function( elem, el ) {
 			// Support: Firefox <=43 - 45
 			// Disconnected elements can have computed display: none, so first confirm that elem is
 			// in the document.
-			jQuery.contains( elem.ownerDocument, elem ) &&
+			isAttached( elem ) &&
 
 			jQuery.css( elem, "display" ) === "none";
 	};
@@ -4863,7 +4906,8 @@ function adjustCSS( elem, prop, valueParts, tween ) {
 		unit = valueParts && valueParts[ 3 ] || ( jQuery.cssNumber[ prop ] ? "" : "px" ),
 
 		// Starting value computation is required for potential unit mismatches
-		initialInUnit = ( jQuery.cssNumber[ prop ] || unit !== "px" && +initial ) &&
+		initialInUnit = elem.nodeType &&
+			( jQuery.cssNumber[ prop ] || unit !== "px" && +initial ) &&
 			rcssNum.exec( jQuery.css( elem, prop ) );
 
 	if ( initialInUnit && initialInUnit[ 3 ] !== unit ) {
@@ -5010,7 +5054,7 @@ jQuery.fn.extend( {
 } );
 var rcheckableType = ( /^(?:checkbox|radio)$/i );
 
-var rtagName = ( /<([a-z][^\/\0>\x20\t\r\n\f]+)/i );
+var rtagName = ( /<([a-z][^\/\0>\x20\t\r\n\f]*)/i );
 
 var rscriptType = ( /^$|^module$|\/(?:java|ecma)script/i );
 
@@ -5082,7 +5126,7 @@ function setGlobalEval( elems, refElements ) {
 var rhtml = /<|&#?\w+;/;
 
 function buildFragment( elems, context, scripts, selection, ignored ) {
-	var elem, tmp, tag, wrap, contains, j,
+	var elem, tmp, tag, wrap, attached, j,
 		fragment = context.createDocumentFragment(),
 		nodes = [],
 		i = 0,
@@ -5146,13 +5190,13 @@ function buildFragment( elems, context, scripts, selection, ignored ) {
 			continue;
 		}
 
-		contains = jQuery.contains( elem.ownerDocument, elem );
+		attached = isAttached( elem );
 
 		// Append to fragment
 		tmp = getAll( fragment.appendChild( elem ), "script" );
 
 		// Preserve script evaluation history
-		if ( contains ) {
+		if ( attached ) {
 			setGlobalEval( tmp );
 		}
 
@@ -5195,8 +5239,6 @@ function buildFragment( elems, context, scripts, selection, ignored ) {
 	div.innerHTML = "<textarea>x</textarea>";
 	support.noCloneChecked = !!div.cloneNode( true ).lastChild.defaultValue;
 } )();
-var documentElement = document.documentElement;
-
 
 
 var
@@ -5212,8 +5254,19 @@ function returnFalse() {
 	return false;
 }
 
+// Support: IE <=9 - 11+
+// focus() and blur() are asynchronous, except when they are no-op.
+// So expect focus to be synchronous when the element is already active,
+// and blur to be synchronous when the element is not already active.
+// (focus and blur are always synchronous in other supported browsers,
+// this just defines when we can count on it).
+function expectSync( elem, type ) {
+	return ( elem === safeActiveElement() ) === ( type === "focus" );
+}
+
 // Support: IE <=9 only
-// See #13393 for more info
+// Accessing document.activeElement can throw unexpectedly
+// https://bugs.jquery.com/ticket/13393
 function safeActiveElement() {
 	try {
 		return document.activeElement;
@@ -5513,9 +5566,10 @@ jQuery.event = {
 			while ( ( handleObj = matched.handlers[ j++ ] ) &&
 				!event.isImmediatePropagationStopped() ) {
 
-				// Triggered event must either 1) have no namespace, or 2) have namespace(s)
-				// a subset or equal to those in the bound event (both can have no namespace).
-				if ( !event.rnamespace || event.rnamespace.test( handleObj.namespace ) ) {
+				// If the event is namespaced, then each handler is only invoked if it is
+				// specially universal or its namespaces are a superset of the event's.
+				if ( !event.rnamespace || handleObj.namespace === false ||
+					event.rnamespace.test( handleObj.namespace ) ) {
 
 					event.handleObj = handleObj;
 					event.data = handleObj.data;
@@ -5639,39 +5693,51 @@ jQuery.event = {
 			// Prevent triggered image.load events from bubbling to window.load
 			noBubble: true
 		},
-		focus: {
-
-			// Fire native event if possible so blur/focus sequence is correct
-			trigger: function() {
-				if ( this !== safeActiveElement() && this.focus ) {
-					this.focus();
-					return false;
-				}
-			},
-			delegateType: "focusin"
-		},
-		blur: {
-			trigger: function() {
-				if ( this === safeActiveElement() && this.blur ) {
-					this.blur();
-					return false;
-				}
-			},
-			delegateType: "focusout"
-		},
 		click: {
 
-			// For checkbox, fire native event so checked state will be right
-			trigger: function() {
-				if ( this.type === "checkbox" && this.click && nodeName( this, "input" ) ) {
-					this.click();
-					return false;
+			// Utilize native event to ensure correct state for checkable inputs
+			setup: function( data ) {
+
+				// For mutual compressibility with _default, replace `this` access with a local var.
+				// `|| data` is dead code meant only to preserve the variable through minification.
+				var el = this || data;
+
+				// Claim the first handler
+				if ( rcheckableType.test( el.type ) &&
+					el.click && nodeName( el, "input" ) ) {
+
+					// dataPriv.set( el, "click", ... )
+					leverageNative( el, "click", returnTrue );
 				}
+
+				// Return false to allow normal processing in the caller
+				return false;
+			},
+			trigger: function( data ) {
+
+				// For mutual compressibility with _default, replace `this` access with a local var.
+				// `|| data` is dead code meant only to preserve the variable through minification.
+				var el = this || data;
+
+				// Force setup before triggering a click
+				if ( rcheckableType.test( el.type ) &&
+					el.click && nodeName( el, "input" ) ) {
+
+					leverageNative( el, "click" );
+				}
+
+				// Return non-false to allow normal event-path propagation
+				return true;
 			},
 
-			// For cross-browser consistency, don't fire native .click() on links
+			// For cross-browser consistency, suppress native .click() on links
+			// Also prevent it if we're currently inside a leveraged native-event stack
 			_default: function( event ) {
-				return nodeName( event.target, "a" );
+				var target = event.target;
+				return rcheckableType.test( target.type ) &&
+					target.click && nodeName( target, "input" ) &&
+					dataPriv.get( target, "click" ) ||
+					nodeName( target, "a" );
 			}
 		},
 
@@ -5687,6 +5753,93 @@ jQuery.event = {
 		}
 	}
 };
+
+// Ensure the presence of an event listener that handles manually-triggered
+// synthetic events by interrupting progress until reinvoked in response to
+// *native* events that it fires directly, ensuring that state changes have
+// already occurred before other listeners are invoked.
+function leverageNative( el, type, expectSync ) {
+
+	// Missing expectSync indicates a trigger call, which must force setup through jQuery.event.add
+	if ( !expectSync ) {
+		if ( dataPriv.get( el, type ) === undefined ) {
+			jQuery.event.add( el, type, returnTrue );
+		}
+		return;
+	}
+
+	// Register the controller as a special universal handler for all event namespaces
+	dataPriv.set( el, type, false );
+	jQuery.event.add( el, type, {
+		namespace: false,
+		handler: function( event ) {
+			var notAsync, result,
+				saved = dataPriv.get( this, type );
+
+			if ( ( event.isTrigger & 1 ) && this[ type ] ) {
+
+				// Interrupt processing of the outer synthetic .trigger()ed event
+				// Saved data should be false in such cases, but might be a leftover capture object
+				// from an async native handler (gh-4350)
+				if ( !saved.length ) {
+
+					// Store arguments for use when handling the inner native event
+					// There will always be at least one argument (an event object), so this array
+					// will not be confused with a leftover capture object.
+					saved = slice.call( arguments );
+					dataPriv.set( this, type, saved );
+
+					// Trigger the native event and capture its result
+					// Support: IE <=9 - 11+
+					// focus() and blur() are asynchronous
+					notAsync = expectSync( this, type );
+					this[ type ]();
+					result = dataPriv.get( this, type );
+					if ( saved !== result || notAsync ) {
+						dataPriv.set( this, type, false );
+					} else {
+						result = {};
+					}
+					if ( saved !== result ) {
+
+						// Cancel the outer synthetic event
+						event.stopImmediatePropagation();
+						event.preventDefault();
+						return result.value;
+					}
+
+				// If this is an inner synthetic event for an event with a bubbling surrogate
+				// (focus or blur), assume that the surrogate already propagated from triggering the
+				// native event and prevent that from happening again here.
+				// This technically gets the ordering wrong w.r.t. to `.trigger()` (in which the
+				// bubbling surrogate propagates *after* the non-bubbling base), but that seems
+				// less bad than duplication.
+				} else if ( ( jQuery.event.special[ type ] || {} ).delegateType ) {
+					event.stopPropagation();
+				}
+
+			// If this is a native event triggered above, everything is now in order
+			// Fire an inner synthetic event with the original arguments
+			} else if ( saved.length ) {
+
+				// ...and capture the result
+				dataPriv.set( this, type, {
+					value: jQuery.event.trigger(
+
+						// Support: IE <=9 - 11+
+						// Extend with the prototype to reset the above stopImmediatePropagation()
+						jQuery.extend( saved[ 0 ], jQuery.Event.prototype ),
+						saved.slice( 1 ),
+						this
+					)
+				} );
+
+				// Abort handling of the native event
+				event.stopImmediatePropagation();
+			}
+		}
+	} );
+}
 
 jQuery.removeEvent = function( elem, type, handle ) {
 
@@ -5800,6 +5953,7 @@ jQuery.each( {
 	shiftKey: true,
 	view: true,
 	"char": true,
+	code: true,
 	charCode: true,
 	key: true,
 	keyCode: true,
@@ -5845,6 +5999,33 @@ jQuery.each( {
 		return event.which;
 	}
 }, jQuery.event.addProp );
+
+jQuery.each( { focus: "focusin", blur: "focusout" }, function( type, delegateType ) {
+	jQuery.event.special[ type ] = {
+
+		// Utilize native event if possible so blur/focus sequence is correct
+		setup: function() {
+
+			// Claim the first handler
+			// dataPriv.set( this, "focus", ... )
+			// dataPriv.set( this, "blur", ... )
+			leverageNative( this, type, expectSync );
+
+			// Return false to allow normal processing in the caller
+			return false;
+		},
+		trigger: function() {
+
+			// Force setup before trigger
+			leverageNative( this, type );
+
+			// Return non-false to allow normal event-path propagation
+			return true;
+		},
+
+		delegateType: delegateType
+	};
+} );
 
 // Create mouseenter/leave events using mouseover/out and event-time checks
 // so that event delegation works in jQuery.
@@ -6096,11 +6277,13 @@ function domManip( collection, args, callback, ignored ) {
 						if ( node.src && ( node.type || "" ).toLowerCase()  !== "module" ) {
 
 							// Optional AJAX dependency, but won't run scripts if not present
-							if ( jQuery._evalUrl ) {
-								jQuery._evalUrl( node.src );
+							if ( jQuery._evalUrl && !node.noModule ) {
+								jQuery._evalUrl( node.src, {
+									nonce: node.nonce || node.getAttribute( "nonce" )
+								} );
 							}
 						} else {
-							DOMEval( node.textContent.replace( rcleanScript, "" ), doc, node );
+							DOMEval( node.textContent.replace( rcleanScript, "" ), node, doc );
 						}
 					}
 				}
@@ -6122,7 +6305,7 @@ function remove( elem, selector, keepData ) {
 		}
 
 		if ( node.parentNode ) {
-			if ( keepData && jQuery.contains( node.ownerDocument, node ) ) {
+			if ( keepData && isAttached( node ) ) {
 				setGlobalEval( getAll( node, "script" ) );
 			}
 			node.parentNode.removeChild( node );
@@ -6140,7 +6323,7 @@ jQuery.extend( {
 	clone: function( elem, dataAndEvents, deepDataAndEvents ) {
 		var i, l, srcElements, destElements,
 			clone = elem.cloneNode( true ),
-			inPage = jQuery.contains( elem.ownerDocument, elem );
+			inPage = isAttached( elem );
 
 		// Fix IE cloning issues
 		if ( !support.noCloneChecked && ( elem.nodeType === 1 || elem.nodeType === 11 ) &&
@@ -6436,8 +6619,10 @@ var rboxStyle = new RegExp( cssExpand.join( "|" ), "i" );
 
 		// Support: IE 9 only
 		// Detect overflow:scroll screwiness (gh-3699)
+		// Support: Chrome <=64
+		// Don't get tricked when zoom affects offsetWidth (gh-4029)
 		div.style.position = "absolute";
-		scrollboxSizeVal = div.offsetWidth === 36 || "absolute";
+		scrollboxSizeVal = roundPixelMeasures( div.offsetWidth / 3 ) === 12;
 
 		documentElement.removeChild( container );
 
@@ -6508,7 +6693,7 @@ function curCSS( elem, name, computed ) {
 	if ( computed ) {
 		ret = computed.getPropertyValue( name ) || computed[ name ];
 
-		if ( ret === "" && !jQuery.contains( elem.ownerDocument, elem ) ) {
+		if ( ret === "" && !isAttached( elem ) ) {
 			ret = jQuery.style( elem, name );
 		}
 
@@ -6564,29 +6749,12 @@ function addGetHookIf( conditionFn, hookFn ) {
 }
 
 
-var
+var cssPrefixes = [ "Webkit", "Moz", "ms" ],
+	emptyStyle = document.createElement( "div" ).style,
+	vendorProps = {};
 
-	// Swappable if display is none or starts with table
-	// except "table", "table-cell", or "table-caption"
-	// See here for display values: https://developer.mozilla.org/en-US/docs/CSS/display
-	rdisplayswap = /^(none|table(?!-c[ea]).+)/,
-	rcustomProp = /^--/,
-	cssShow = { position: "absolute", visibility: "hidden", display: "block" },
-	cssNormalTransform = {
-		letterSpacing: "0",
-		fontWeight: "400"
-	},
-
-	cssPrefixes = [ "Webkit", "Moz", "ms" ],
-	emptyStyle = document.createElement( "div" ).style;
-
-// Return a css property mapped to a potentially vendor prefixed property
+// Return a vendor-prefixed property or undefined
 function vendorPropName( name ) {
-
-	// Shortcut for names that are not vendor prefixed
-	if ( name in emptyStyle ) {
-		return name;
-	}
 
 	// Check for vendor prefixed names
 	var capName = name[ 0 ].toUpperCase() + name.slice( 1 ),
@@ -6600,15 +6768,32 @@ function vendorPropName( name ) {
 	}
 }
 
-// Return a property mapped along what jQuery.cssProps suggests or to
-// a vendor prefixed property.
+// Return a potentially-mapped jQuery.cssProps or vendor prefixed property
 function finalPropName( name ) {
-	var ret = jQuery.cssProps[ name ];
-	if ( !ret ) {
-		ret = jQuery.cssProps[ name ] = vendorPropName( name ) || name;
+	var final = jQuery.cssProps[ name ] || vendorProps[ name ];
+
+	if ( final ) {
+		return final;
 	}
-	return ret;
+	if ( name in emptyStyle ) {
+		return name;
+	}
+	return vendorProps[ name ] = vendorPropName( name ) || name;
 }
+
+
+var
+
+	// Swappable if display is none or starts with table
+	// except "table", "table-cell", or "table-caption"
+	// See here for display values: https://developer.mozilla.org/en-US/docs/CSS/display
+	rdisplayswap = /^(none|table(?!-c[ea]).+)/,
+	rcustomProp = /^--/,
+	cssShow = { position: "absolute", visibility: "hidden", display: "block" },
+	cssNormalTransform = {
+		letterSpacing: "0",
+		fontWeight: "400"
+	};
 
 function setPositiveNumber( elem, value, subtract ) {
 
@@ -6681,7 +6866,10 @@ function boxModelAdjustment( elem, dimension, box, isBorderBox, styles, computed
 			delta -
 			extra -
 			0.5
-		) );
+
+		// If offsetWidth/offsetHeight is unknown, then we can't determine content-box scroll gutter
+		// Use an explicit zero to avoid NaN (gh-3964)
+		) ) || 0;
 	}
 
 	return delta;
@@ -6691,9 +6879,16 @@ function getWidthOrHeight( elem, dimension, extra ) {
 
 	// Start with computed style
 	var styles = getStyles( elem ),
+
+		// To avoid forcing a reflow, only fetch boxSizing if we need it (gh-4322).
+		// Fake content-box until we know it's needed to know the true value.
+		boxSizingNeeded = !support.boxSizingReliable() || extra,
+		isBorderBox = boxSizingNeeded &&
+			jQuery.css( elem, "boxSizing", false, styles ) === "border-box",
+		valueIsBorderBox = isBorderBox,
+
 		val = curCSS( elem, dimension, styles ),
-		isBorderBox = jQuery.css( elem, "boxSizing", false, styles ) === "border-box",
-		valueIsBorderBox = isBorderBox;
+		offsetProp = "offset" + dimension[ 0 ].toUpperCase() + dimension.slice( 1 );
 
 	// Support: Firefox <=54
 	// Return a confounding non-pixel value or feign ignorance, as appropriate.
@@ -6704,22 +6899,29 @@ function getWidthOrHeight( elem, dimension, extra ) {
 		val = "auto";
 	}
 
-	// Check for style in case a browser which returns unreliable values
-	// for getComputedStyle silently falls back to the reliable elem.style
-	valueIsBorderBox = valueIsBorderBox &&
-		( support.boxSizingReliable() || val === elem.style[ dimension ] );
 
 	// Fall back to offsetWidth/offsetHeight when value is "auto"
 	// This happens for inline elements with no explicit setting (gh-3571)
 	// Support: Android <=4.1 - 4.3 only
 	// Also use offsetWidth/offsetHeight for misreported inline dimensions (gh-3602)
-	if ( val === "auto" ||
-		!parseFloat( val ) && jQuery.css( elem, "display", false, styles ) === "inline" ) {
+	// Support: IE 9-11 only
+	// Also use offsetWidth/offsetHeight for when box sizing is unreliable
+	// We use getClientRects() to check for hidden/disconnected.
+	// In those cases, the computed value can be trusted to be border-box
+	if ( ( !support.boxSizingReliable() && isBorderBox ||
+		val === "auto" ||
+		!parseFloat( val ) && jQuery.css( elem, "display", false, styles ) === "inline" ) &&
+		elem.getClientRects().length ) {
 
-		val = elem[ "offset" + dimension[ 0 ].toUpperCase() + dimension.slice( 1 ) ];
+		isBorderBox = jQuery.css( elem, "boxSizing", false, styles ) === "border-box";
 
-		// offsetWidth/offsetHeight provide border-box values
-		valueIsBorderBox = true;
+		// Where available, offsetWidth/offsetHeight approximate border box dimensions.
+		// Where not available (e.g., SVG), assume unreliable box-sizing and interpret the
+		// retrieved value as a content box dimension.
+		valueIsBorderBox = offsetProp in elem;
+		if ( valueIsBorderBox ) {
+			val = elem[ offsetProp ];
+		}
 	}
 
 	// Normalize "" and auto
@@ -6765,6 +6967,13 @@ jQuery.extend( {
 		"flexGrow": true,
 		"flexShrink": true,
 		"fontWeight": true,
+		"gridArea": true,
+		"gridColumn": true,
+		"gridColumnEnd": true,
+		"gridColumnStart": true,
+		"gridRow": true,
+		"gridRowEnd": true,
+		"gridRowStart": true,
 		"lineHeight": true,
 		"opacity": true,
 		"order": true,
@@ -6820,7 +7029,9 @@ jQuery.extend( {
 			}
 
 			// If a number was passed in, add the unit (except for certain CSS properties)
-			if ( type === "number" ) {
+			// The isCustomProp check can be removed in jQuery 4.0 when we only auto-append
+			// "px" to a few hardcoded values.
+			if ( type === "number" && !isCustomProp ) {
 				value += ret && ret[ 3 ] || ( jQuery.cssNumber[ origName ] ? "" : "px" );
 			}
 
@@ -6920,18 +7131,29 @@ jQuery.each( [ "height", "width" ], function( i, dimension ) {
 		set: function( elem, value, extra ) {
 			var matches,
 				styles = getStyles( elem ),
-				isBorderBox = jQuery.css( elem, "boxSizing", false, styles ) === "border-box",
-				subtract = extra && boxModelAdjustment(
-					elem,
-					dimension,
-					extra,
-					isBorderBox,
-					styles
-				);
+
+				// Only read styles.position if the test has a chance to fail
+				// to avoid forcing a reflow.
+				scrollboxSizeBuggy = !support.scrollboxSize() &&
+					styles.position === "absolute",
+
+				// To avoid forcing a reflow, only fetch boxSizing if we need it (gh-3991)
+				boxSizingNeeded = scrollboxSizeBuggy || extra,
+				isBorderBox = boxSizingNeeded &&
+					jQuery.css( elem, "boxSizing", false, styles ) === "border-box",
+				subtract = extra ?
+					boxModelAdjustment(
+						elem,
+						dimension,
+						extra,
+						isBorderBox,
+						styles
+					) :
+					0;
 
 			// Account for unreliable border-box dimensions by comparing offset* to computed and
 			// faking a content-box to get border and padding (gh-3699)
-			if ( isBorderBox && support.scrollboxSize() === styles.position ) {
+			if ( isBorderBox && scrollboxSizeBuggy ) {
 				subtract -= Math.ceil(
 					elem[ "offset" + dimension[ 0 ].toUpperCase() + dimension.slice( 1 ) ] -
 					parseFloat( styles[ dimension ] ) -
@@ -7099,9 +7321,9 @@ Tween.propHooks = {
 			// Use .style if available and use plain properties where available.
 			if ( jQuery.fx.step[ tween.prop ] ) {
 				jQuery.fx.step[ tween.prop ]( tween );
-			} else if ( tween.elem.nodeType === 1 &&
-				( tween.elem.style[ jQuery.cssProps[ tween.prop ] ] != null ||
-					jQuery.cssHooks[ tween.prop ] ) ) {
+			} else if ( tween.elem.nodeType === 1 && (
+					jQuery.cssHooks[ tween.prop ] ||
+					tween.elem.style[ finalPropName( tween.prop ) ] != null ) ) {
 				jQuery.style( tween.elem, tween.prop, tween.now + tween.unit );
 			} else {
 				tween.elem[ tween.prop ] = tween.now;
@@ -8808,6 +9030,10 @@ jQuery.param = function( a, traditional ) {
 				encodeURIComponent( value == null ? "" : value );
 		};
 
+	if ( a == null ) {
+		return "";
+	}
+
 	// If an array was passed in, assume that it is an array of form elements.
 	if ( Array.isArray( a ) || ( a.jquery && !jQuery.isPlainObject( a ) ) ) {
 
@@ -9310,12 +9536,14 @@ jQuery.extend( {
 						if ( !responseHeaders ) {
 							responseHeaders = {};
 							while ( ( match = rheaders.exec( responseHeadersString ) ) ) {
-								responseHeaders[ match[ 1 ].toLowerCase() ] = match[ 2 ];
+								responseHeaders[ match[ 1 ].toLowerCase() + " " ] =
+									( responseHeaders[ match[ 1 ].toLowerCase() + " " ] || [] )
+										.concat( match[ 2 ] );
 							}
 						}
-						match = responseHeaders[ key.toLowerCase() ];
+						match = responseHeaders[ key.toLowerCase() + " " ];
 					}
-					return match == null ? null : match;
+					return match == null ? null : match.join( ", " );
 				},
 
 				// Raw string
@@ -9704,7 +9932,7 @@ jQuery.each( [ "get", "post" ], function( i, method ) {
 } );
 
 
-jQuery._evalUrl = function( url ) {
+jQuery._evalUrl = function( url, options ) {
 	return jQuery.ajax( {
 		url: url,
 
@@ -9714,7 +9942,16 @@ jQuery._evalUrl = function( url ) {
 		cache: true,
 		async: false,
 		global: false,
-		"throws": true
+
+		// Only evaluate the response if it is successful (gh-4126)
+		// dataFilter is not invoked for failure responses, so using it instead
+		// of the default converter is kludgy but it works.
+		converters: {
+			"text script": function() {}
+		},
+		dataFilter: function( response ) {
+			jQuery.globalEval( response, options );
+		}
 	} );
 };
 
@@ -9997,24 +10234,21 @@ jQuery.ajaxPrefilter( "script", function( s ) {
 // Bind script tag hack transport
 jQuery.ajaxTransport( "script", function( s ) {
 
-	// This transport only deals with cross domain requests
-	if ( s.crossDomain ) {
+	// This transport only deals with cross domain or forced-by-attrs requests
+	if ( s.crossDomain || s.scriptAttrs ) {
 		var script, callback;
 		return {
 			send: function( _, complete ) {
-				script = jQuery( "<script>" ).prop( {
-					charset: s.scriptCharset,
-					src: s.url
-				} ).on(
-					"load error",
-					callback = function( evt ) {
+				script = jQuery( "<script>" )
+					.attr( s.scriptAttrs || {} )
+					.prop( { charset: s.scriptCharset, src: s.url } )
+					.on( "load error", callback = function( evt ) {
 						script.remove();
 						callback = null;
 						if ( evt ) {
 							complete( evt.type === "error" ? 404 : 200, evt.type );
 						}
-					}
-				);
+					} );
 
 				// Use native DOM manipulation to avoid our domManip AJAX trickery
 				document.head.appendChild( script[ 0 ] );
@@ -10712,7 +10946,7 @@ return jQuery;
  *            Portions Copyright 2008-2011 Apple Inc. All rights reserved.
  * @license   Licensed under MIT license
  *            See https://raw.github.com/emberjs/ember.js/master/LICENSE
- * @version   3.4.1
+ * @version   3.4.8
  */
 
 /*globals process */
@@ -12285,7 +12519,6 @@ enifed('@ember/canary-features/index', ['exports', '@ember/polyfills', 'ember-en
     var GLIMMER_CUSTOM_COMPONENT_MANAGER = exports.GLIMMER_CUSTOM_COMPONENT_MANAGER = featureValue(FEATURES.GLIMMER_CUSTOM_COMPONENT_MANAGER);
     var EMBER_TEMPLATE_BLOCK_LET_HELPER = exports.EMBER_TEMPLATE_BLOCK_LET_HELPER = featureValue(FEATURES.EMBER_TEMPLATE_BLOCK_LET_HELPER);
     var EMBER_GLIMMER_ANGLE_BRACKET_INVOCATION = exports.EMBER_GLIMMER_ANGLE_BRACKET_INVOCATION = featureValue(FEATURES.EMBER_GLIMMER_ANGLE_BRACKET_INVOCATION);
-    //# sourceMappingURL=index.js.map
 });
 enifed('@ember/controller/index', ['exports', 'ember-runtime', '@ember/controller/lib/controller_mixin', 'ember-metal'], function (exports, _emberRuntime, _controller_mixin, _emberMetal) {
   'use strict';
@@ -12870,7 +13103,6 @@ enifed("@ember/debug/lib/testing", ["exports"], function (exports) {
     function setTesting(value) {
         testing = !!value;
     }
-    //# sourceMappingURL=testing.js.map
 });
 enifed('@ember/debug/lib/warn', ['exports', 'ember-environment', '@ember/debug/index', '@ember/debug/lib/deprecate', '@ember/debug/lib/handlers'], function (exports, _emberEnvironment, _index, _deprecate, _handlers) {
     'use strict';
@@ -12996,7 +13228,6 @@ enifed('@ember/deprecated-features/index', ['exports'], function (exports) {
   var BINDING_SUPPORT = exports.BINDING_SUPPORT = !!'2.7.0-beta.1';
   var MAP = exports.MAP = !!'3.3.0-beta.1';
   var ORDERED_SET = exports.ORDERED_SET = !!'3.3.0-beta.1';
-  //# sourceMappingURL=index.js.map
 });
 enifed('@ember/engine/index', ['exports', '@ember/engine/lib/engine-parent', 'ember-babel', 'ember-utils', '@ember/controller', 'ember-runtime', 'container', 'dag-map', '@ember/debug', 'ember-metal', '@ember/application/globals-resolver', '@ember/engine/instance', 'ember-routing', 'ember-extension-support', 'ember-views', 'ember-glimmer'], function (exports, _engineParent, _emberBabel, _emberUtils, _controller, _emberRuntime, _container, _dagMap, _debug, _emberMetal, _globalsResolver, _instance, _emberRouting, _emberExtensionSupport, _emberViews, _emberGlimmer) {
   'use strict';
@@ -13897,7 +14128,6 @@ enifed('@ember/instrumentation/index', ['exports', 'ember-environment'], functio
         subscribers.length = 0;
         cache = {};
     }
-    //# sourceMappingURL=index.js.map
 });
 enifed('@ember/map/index', ['exports', 'ember-babel', '@ember/debug', 'ember-utils', '@ember/map/lib/ordered-set', '@ember/map/lib/utils', '@ember/deprecated-features'], function (exports, _emberBabel, _debug, _emberUtils, _orderedSet, _utils, _deprecatedFeatures) {
   'use strict';
@@ -16349,7 +16579,6 @@ enifed('@ember/polyfills/lib/merge', ['exports'], function (exports) {
         }
         return original;
     }
-    //# sourceMappingURL=merge.js.map
 });
 enifed('@ember/runloop/index', ['exports', '@ember/debug', 'ember-error-handling', 'ember-metal', 'backburner', '@ember/deprecated-features'], function (exports, _debug, _emberErrorHandling, _emberMetal, _backburner, _deprecatedFeatures) {
   'use strict';
@@ -17585,7 +17814,6 @@ enifed('@ember/string/index', ['exports', '@ember/string/lib/string_registry', '
             }
         });
     }
-    //# sourceMappingURL=index.js.map
 });
 enifed("@ember/string/lib/string_registry", ["exports"], function (exports) {
     "use strict";
@@ -17606,7 +17834,6 @@ enifed("@ember/string/lib/string_registry", ["exports"], function (exports) {
     function getString(name) {
         return STRINGS[name];
     }
-    //# sourceMappingURL=string_registry.js.map
 });
 enifed('@glimmer/encoder', ['exports', 'ember-babel'], function (exports, _emberBabel) {
     'use strict';
@@ -17630,8 +17857,8 @@ enifed('@glimmer/encoder', ['exports', 'ember-babel'], function (exports, _ember
             this.typePos = this.buffer.length - 1;
             for (var i = 2; i < arguments.length; i++) {
                 var op = arguments[i];
-                if (typeof op === 'number' && op > 65535 /* MAX_SIZE */) {
-                        throw new Error('Operand over 16-bits. Got ' + op + '.');
+                if (typeof op === 'number' && op > 4294967295 /* MAX_SIZE */) {
+                        throw new Error('Operand over 32-bits. Got ' + op + '.');
                     }
                 this.buffer.push(op);
             }
@@ -17660,8 +17887,8 @@ enifed('@glimmer/encoder', ['exports', 'ember-babel'], function (exports, _ember
 
     exports.InstructionEncoder = InstructionEncoder;
 });
-enifed('@glimmer/low-level', ['exports', 'ember-babel'], function (exports, _emberBabel) {
-    'use strict';
+enifed("@glimmer/low-level", ["exports", "ember-babel"], function (exports, _emberBabel) {
+    "use strict";
 
     exports.Stack = exports.Storage = undefined;
 
@@ -17728,16 +17955,8 @@ enifed('@glimmer/low-level', ['exports', 'ember-babel'], function (exports, _emb
             this.vec[pos] = value;
         };
 
-        Stack.prototype.writeSmi = function writeSmi(pos, value) {
-            this.vec[pos] = encodeSmi(value);
-        };
-
         Stack.prototype.getRaw = function getRaw(pos) {
             return this.vec[pos];
-        };
-
-        Stack.prototype.getSmi = function getSmi(pos) {
-            return decodeSmi(this.vec[pos]);
         };
 
         Stack.prototype.reset = function reset() {
@@ -17750,24 +17969,6 @@ enifed('@glimmer/low-level', ['exports', 'ember-babel'], function (exports, _emb
 
         return Stack;
     }();
-
-    function decodeSmi(smi) {
-        switch (smi & 7) {
-            case 0 /* NUMBER */:
-                return smi >> 3;
-            case 4 /* NEGATIVE */:
-                return -(smi >> 3);
-            default:
-                throw new Error('unreachable');
-        }
-    }
-    function encodeSmi(primitive) {
-        if (primitive < 0) {
-            return Math.abs(primitive) << 3 | 4 /* NEGATIVE */;
-        } else {
-            return primitive << 3 | 0 /* NUMBER */;
-        }
-    }
 
     exports.Storage = Storage;
     exports.Stack = Stack;
@@ -19623,7 +19824,7 @@ enifed('@glimmer/opcode-compiler', ['exports', '@ember/polyfills', 'ember-babel'
 
             if (capabilities.createArgs) {
                 this.pushFrame();
-                this.compileArgs(null, hash, null, synthetic);
+                this.compileArgs(params, hash, null, synthetic);
             }
             this.beginComponentTransaction();
             if (capabilities.dynamicScope) {
@@ -19825,7 +20026,7 @@ enifed('@glimmer/opcode-compiler', ['exports', '@ember/polyfills', 'ember-babel'
         };
 
         OpcodeBuilder.prototype.sizeImmediate = function sizeImmediate(shifted, primitive) {
-            if (shifted >= 65535 /* MAX_SIZE */ || shifted < 0) {
+            if (shifted >= 4294967295 /* MAX_SIZE */ || shifted < 0) {
                 return this.constants.number(primitive) << 3 | 5 /* BIG_NUM */;
             }
             return shifted;
@@ -20562,10 +20763,12 @@ enifed('@glimmer/program', ['exports', 'ember-babel', '@glimmer/util'], function
         return Opcode;
     }();
 
-    function encodeTableInfo(size, scopeSize, state) {
-        return size | scopeSize << 16 | state << 30;
+    function encodeTableInfo(scopeSize, state) {
+
+        return state | scopeSize << 2;
     }
     function changeState(info, newState) {
+
         return info | newState << 30;
     }
     var PAGE_SIZE = 0x100000;
@@ -20579,9 +20782,9 @@ enifed('@glimmer/program', ['exports', 'ember-babel', '@glimmer/util'], function
      *
      * The table 32-bit aligned and has the following layout:
      *
-     * | ... | hp (u32) |       info (u32)          |
-     * | ... |  Handle  | Size | Scope Size | State |
-     * | ... | 32-bits  | 16b  |    14b     |  2b   |
+     * | ... | hp (u32) |       info (u32)   | size (u32) |
+     * | ... |  Handle  | Scope Size | State | Size       |
+     * | ... | 32bits   | 30bits     | 2bits | 32bit      |
      *
      * With this information we effectively have the ability to
      * control when we want to free memory. That being said you
@@ -20603,13 +20806,13 @@ enifed('@glimmer/program', ['exports', 'ember-babel', '@glimmer/util'], function
                     table = serializedHeap.table,
                     handle = serializedHeap.handle;
 
-                this.heap = new Uint16Array(buffer);
+                this.heap = new Uint32Array(buffer);
                 this.table = table;
                 this.offset = this.heap.length;
                 this.handle = handle;
                 this.capacity = 0;
             } else {
-                this.heap = new Uint16Array(PAGE_SIZE);
+                this.heap = new Uint32Array(PAGE_SIZE);
                 this.table = [];
             }
         }
@@ -20622,7 +20825,7 @@ enifed('@glimmer/program', ['exports', 'ember-babel', '@glimmer/util'], function
         Heap.prototype.sizeCheck = function sizeCheck() {
             if (this.capacity === 0) {
                 var heap = slice(this.heap, 0, this.offset);
-                this.heap = new Uint16Array(heap.length + PAGE_SIZE);
+                this.heap = new Uint32Array(heap.length + PAGE_SIZE);
                 this.heap.set(heap, 0);
                 this.capacity = PAGE_SIZE;
             }
@@ -20638,18 +20841,15 @@ enifed('@glimmer/program', ['exports', 'ember-babel', '@glimmer/util'], function
         };
 
         Heap.prototype.malloc = function malloc() {
-            this.table.push(this.offset, 0);
+            // push offset, info, size
+            this.table.push(this.offset, 0, 0);
             var handle = this.handle;
-            this.handle += 2 /* ENTRY_SIZE */;
+            this.handle += 3 /* ENTRY_SIZE */;
             return handle;
         };
 
         Heap.prototype.finishMalloc = function finishMalloc(handle, scopeSize) {
-            var start = this.table[handle];
-            var finish = this.offset;
-            var instructionSize = finish - start;
-            var info = encodeTableInfo(instructionSize, scopeSize, 0 /* Allocated */);
-            this.table[handle + 1 /* INFO_OFFSET */] = info;
+            this.table[handle + 1 /* INFO_OFFSET */] = encodeTableInfo(scopeSize, 0 /* Allocated */);
         };
 
         Heap.prototype.size = function size() {
@@ -20661,9 +20861,9 @@ enifed('@glimmer/program', ['exports', 'ember-babel', '@glimmer/util'], function
         };
 
         Heap.prototype.gethandle = function gethandle(address) {
-            this.table.push(address, encodeTableInfo(0, 0, 3 /* Pointer */));
+            this.table.push(address, encodeTableInfo(0, 3 /* Pointer */), 0);
             var handle = this.handle;
-            this.handle += 2 /* ENTRY_SIZE */;
+            this.handle += 3 /* ENTRY_SIZE */;
             return handle;
         };
 
@@ -20673,7 +20873,7 @@ enifed('@glimmer/program', ['exports', 'ember-babel', '@glimmer/util'], function
 
         Heap.prototype.scopesizeof = function scopesizeof(handle) {
             var info = this.table[handle + 1 /* INFO_OFFSET */];
-            return (info & 1073676288 /* SCOPE_MASK */) >> 16;
+            return info >> 2;
         };
 
         Heap.prototype.free = function free(handle) {
@@ -20681,41 +20881,10 @@ enifed('@glimmer/program', ['exports', 'ember-babel', '@glimmer/util'], function
             this.table[handle + 1 /* INFO_OFFSET */] = changeState(info, 1 /* Freed */);
         };
 
-        Heap.prototype.compact = function compact() {
-            var compactedSize = 0;
-            var table = this.table,
-                length = this.table.length,
-                heap = this.heap;
-
-            for (var i = 0; i < length; i += 2 /* ENTRY_SIZE */) {
-                var offset = table[i];
-                var info = table[i + 1 /* INFO_OFFSET */];
-                var size = info & 65535 /* SIZE_MASK */;
-                var state = info & 3221225472 /* STATE_MASK */ >> 30;
-                if (state === 2 /* Purged */) {
-                        continue;
-                    } else if (state === 1 /* Freed */) {
-                        // transition to "already freed" aka "purged"
-                        // a good improvement would be to reuse
-                        // these slots
-                        table[i + 1 /* INFO_OFFSET */] = changeState(info, 2 /* Purged */);
-                        compactedSize += size;
-                    } else if (state === 0 /* Allocated */) {
-                        for (var j = offset; j <= i + size; j++) {
-                            heap[j - compactedSize] = heap[j];
-                        }
-                        table[i] = offset - compactedSize;
-                    } else if (state === 3 /* Pointer */) {
-                        table[i] = offset - compactedSize;
-                    }
-            }
-            this.offset = this.offset - compactedSize;
-        };
-
         Heap.prototype.pushPlaceholder = function pushPlaceholder(valueFunc) {
             this.sizeCheck();
             var address = this.offset++;
-            this.heap[address] = 65535 /* MAX_SIZE */;
+            this.heap[address] = 2147483647 /* MAX_SIZE */;
             this.placeholders.push([address, valueFunc]);
         };
 
@@ -20805,7 +20974,7 @@ enifed('@glimmer/program', ['exports', 'ember-babel', '@glimmer/util'], function
         if (arr.slice !== undefined) {
             return arr.slice(start, end);
         }
-        var ret = new Uint16Array(end);
+        var ret = new Uint32Array(end);
         for (; start < end; start++) {
             ret[start] = arr[start];
         }
@@ -22165,7 +22334,7 @@ enifed('@glimmer/runtime', ['exports', 'ember-babel', '@glimmer/util', '@glimmer
         var stack = vm.stack;
         var block = stack.pop();
         if (block) {
-            stack.pushSmi(block.compile());
+            stack.push(block.compile());
         } else {
             stack.pushNull();
         }
@@ -23401,9 +23570,6 @@ enifed('@glimmer/runtime', ['exports', 'ember-babel', '@glimmer/util', '@glimmer
             }
 
             DOMChangesWithSVGInnerHTMLFix.prototype.insertHTMLBefore = function insertHTMLBefore(parent, nextSibling, html) {
-                if (html === null || html === '') {
-                    return _DOMClass.prototype.insertHTMLBefore.call(this, parent, nextSibling, html);
-                }
                 if (parent.namespaceURI !== svgNamespace) {
                     return _DOMClass.prototype.insertHTMLBefore.call(this, parent, nextSibling, html);
                 }
@@ -23414,12 +23580,24 @@ enifed('@glimmer/runtime', ['exports', 'ember-babel', '@glimmer/util', '@glimmer
         }(DOMClass);
     }
     function fixSVG(parent, div, html, reference) {
-        // IE, Edge: also do not correctly support using `innerHTML` on SVG
-        // namespaced elements. So here a wrapper is used.
-        var wrappedHtml = '<svg>' + html + '</svg>';
-        div.innerHTML = wrappedHtml;
+        var source = void 0;
+        // This is important, because decendants of the <foreignObject> integration
+        // point are parsed in the HTML namespace
+        if (parent.tagName.toUpperCase() === 'FOREIGNOBJECT') {
+            // IE, Edge: also do not correctly support using `innerHTML` on SVG
+            // namespaced elements. So here a wrapper is used.
+            var wrappedHtml = '<svg><foreignObject>' + (html || '<!---->') + '</foreignObject></svg>';
+            div.innerHTML = wrappedHtml;
+            source = div.firstChild.firstChild;
+        } else {
+            // IE, Edge: also do not correctly support using `innerHTML` on SVG
+            // namespaced elements. So here a wrapper is used.
+            var _wrappedHtml = '<svg>' + (html || '<!---->') + '</svg>';
+            div.innerHTML = _wrappedHtml;
+            source = div.firstChild;
+        }
 
-        var _moveNodesBefore = moveNodesBefore(div.firstChild, parent, reference),
+        var _moveNodesBefore = moveNodesBefore(source, parent, reference),
             first = _moveNodesBefore[0],
             last = _moveNodesBefore[1];
 
@@ -23472,9 +23650,6 @@ enifed('@glimmer/runtime', ['exports', 'ember-babel', '@glimmer/util', '@glimmer
             }
 
             DOMChangesWithTextNodeMergingFix.prototype.insertHTMLBefore = function insertHTMLBefore(parent, nextSibling, html) {
-                if (html === null) {
-                    return _DOMClass2.prototype.insertHTMLBefore.call(this, parent, nextSibling, html);
-                }
                 var didSetUselessComment = false;
                 var nextPrevious = nextSibling ? nextSibling.previousSibling : parent.lastChild;
                 if (nextPrevious && nextPrevious instanceof Text) {
@@ -23650,19 +23825,12 @@ enifed('@glimmer/runtime', ['exports', 'ember-babel', '@glimmer/util', '@glimmer
         return DOMChanges;
     }(DOMOperations);
 
-    function _insertHTMLBefore(useless, _parent, _nextSibling, html) {
-        // tslint:disable-line
-        // TypeScript vendored an old version of the DOM spec where `insertAdjacentHTML`
-        // only exists on `HTMLElement` but not on `Element`. We actually work with the
-        // newer version of the DOM API here (and monkey-patch this method in `./compat`
-        // when we detect older browsers). This is a hack to work around this limitation.
+    function _insertHTMLBefore(useless, _parent, _nextSibling, _html) {
         var parent = _parent;
         var nextSibling = _nextSibling;
         var prev = nextSibling ? nextSibling.previousSibling : parent.lastChild;
         var last = void 0;
-        if (html === null || html === '') {
-            return new ConcreteBounds(parent, null, null);
-        }
+        var html = _html || '<!---->';
         if (nextSibling === null) {
             parent.insertAdjacentHTML('beforeend', html);
             last = parent.lastChild;
@@ -24347,19 +24515,19 @@ enifed('@glimmer/runtime', ['exports', 'ember-babel', '@glimmer/util', '@glimmer
 
 
         LowLevelVM.prototype.pushFrame = function pushFrame() {
-            this.stack.pushSmi(this.ra);
-            this.stack.pushSmi(this.stack.fp);
+            this.stack.push(this.ra);
+            this.stack.push(this.stack.fp);
             this.stack.fp = this.stack.sp - 1;
         };
 
         LowLevelVM.prototype.popFrame = function popFrame() {
             this.stack.sp = this.stack.fp - 1;
-            this.ra = this.stack.getSmi(0);
-            this.stack.fp = this.stack.getSmi(1);
+            this.ra = this.stack.get(0);
+            this.stack.fp = this.stack.get(1);
         };
 
         LowLevelVM.prototype.pushSmallFrame = function pushSmallFrame() {
-            this.stack.pushSmi(this.ra);
+            this.stack.push(this.ra);
         };
 
         LowLevelVM.prototype.popSmallFrame = function popSmallFrame() {
@@ -24804,7 +24972,7 @@ enifed('@glimmer/runtime', ['exports', 'ember-babel', '@glimmer/util', '@glimmer
         };
 
         SimpleBlockTracker.prototype.finalize = function finalize(stack) {
-            if (!this.first) {
+            if (this.first === null) {
                 stack.appendComment('');
             }
         };
@@ -24904,8 +25072,7 @@ enifed('@glimmer/runtime', ['exports', 'ember-babel', '@glimmer/util', '@glimmer
         return NewElementBuilder.forInitialRender(env, cursor);
     }
 
-    var HI = 0x80000000;
-    var MASK = 0x7fffffff;
+    var MAX_SMI = 0xfffffff;
 
     var InnerStack = function () {
         function InnerStack() {
@@ -24947,29 +25114,21 @@ enifed('@glimmer/runtime', ['exports', 'ember-babel', '@glimmer/util', '@glimmer
             } else {
                 var idx = this.js.length;
                 this.js.push(value);
-                this.inner.writeRaw(pos, idx | HI);
+                this.inner.writeRaw(pos, ~idx);
             }
         };
 
-        InnerStack.prototype.writeSmi = function writeSmi(pos, value) {
-            this.inner.writeSmi(pos, value);
-        };
-
-        InnerStack.prototype.writeImmediate = function writeImmediate(pos, value) {
+        InnerStack.prototype.writeRaw = function writeRaw(pos, value) {
             this.inner.writeRaw(pos, value);
         };
 
         InnerStack.prototype.get = function get(pos) {
             var value = this.inner.getRaw(pos);
-            if (value & HI) {
-                return this.js[value & MASK];
+            if (value < 0) {
+                return this.js[~value];
             } else {
                 return decodeImmediate(value);
             }
-        };
-
-        InnerStack.prototype.getSmi = function getSmi(pos) {
-            return this.inner.getSmi(pos);
         };
 
         InnerStack.prototype.reset = function reset() {
@@ -25011,20 +25170,12 @@ enifed('@glimmer/runtime', ['exports', 'ember-babel', '@glimmer/util', '@glimmer
             this.stack.write(++this.sp, value);
         };
 
-        EvaluationStack.prototype.pushSmi = function pushSmi(value) {
-            this.stack.writeSmi(++this.sp, value);
-        };
-
-        EvaluationStack.prototype.pushImmediate = function pushImmediate(value) {
-            this.stack.writeImmediate(++this.sp, encodeImmediate(value));
-        };
-
         EvaluationStack.prototype.pushEncodedImmediate = function pushEncodedImmediate(value) {
-            this.stack.writeImmediate(++this.sp, value);
+            this.stack.writeRaw(++this.sp, value);
         };
 
         EvaluationStack.prototype.pushNull = function pushNull() {
-            this.stack.writeImmediate(++this.sp, 19 /* Null */);
+            this.stack.write(++this.sp, null);
         };
 
         EvaluationStack.prototype.dup = function dup() {
@@ -25046,7 +25197,7 @@ enifed('@glimmer/runtime', ['exports', 'ember-babel', '@glimmer/util', '@glimmer
         };
 
         EvaluationStack.prototype.popSmi = function popSmi() {
-            return this.stack.getSmi(this.sp--);
+            return this.stack.get(this.sp--);
         };
 
         EvaluationStack.prototype.peek = function peek() {
@@ -25055,22 +25206,10 @@ enifed('@glimmer/runtime', ['exports', 'ember-babel', '@glimmer/util', '@glimmer
             return this.stack.get(this.sp - offset);
         };
 
-        EvaluationStack.prototype.peekSmi = function peekSmi() {
-            var offset = arguments.length > 0 && arguments[0] !== undefined ? arguments[0] : 0;
-
-            return this.stack.getSmi(this.sp - offset);
-        };
-
         EvaluationStack.prototype.get = function get(offset) {
             var base = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : this.fp;
 
             return this.stack.get(base + offset);
-        };
-
-        EvaluationStack.prototype.getSmi = function getSmi(offset) {
-            var base = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : this.fp;
-
-            return this.stack.getSmi(base + offset);
         };
 
         EvaluationStack.prototype.set = function set(value, offset) {
@@ -25115,8 +25254,7 @@ enifed('@glimmer/runtime', ['exports', 'ember-babel', '@glimmer/util', '@glimmer
                 // not an integer
                 if (value % 1 !== 0) return false;
                 var abs = Math.abs(value);
-                // too big
-                if (abs > HI) return false;
+                if (abs > MAX_SMI) return false;
                 return true;
             default:
                 return false;
@@ -25124,8 +25262,11 @@ enifed('@glimmer/runtime', ['exports', 'ember-babel', '@glimmer/util', '@glimmer
     }
     function encodeSmi(primitive) {
         if (primitive < 0) {
+            var abs = Math.abs(primitive);
+            if (abs > MAX_SMI) throw new Error('not smi');
             return Math.abs(primitive) << 3 | 4 /* NEGATIVE */;
         } else {
+            if (primitive > MAX_SMI) throw new Error('not smi');
             return primitive << 3 | 0 /* NUMBER */;
         }
     }
@@ -27339,7 +27480,7 @@ enifed('backburner', ['exports', 'ember-babel'], function (exports, _emberBabel)
         }
         return {
             setTimeout: function (fn, ms) {
-                return SET_TIMEOUT(fn, ms);
+                return setTimeout(fn, ms);
             },
             clearTimeout: function (timerId) {
                 return clearTimeout(timerId);
@@ -27354,6 +27495,7 @@ enifed('backburner', ['exports', 'ember-babel'], function (exports, _emberBabel)
     }
 
     var NUMBER = /\d+/;
+    var TIMERS_OFFSET = 6;
     function isCoercableNumber(suspect) {
         var type = typeof suspect;
         return type === 'number' && suspect === suspect || type === 'string' && NUMBER.test(suspect);
@@ -27381,27 +27523,45 @@ enifed('backburner', ['exports', 'ember-babel'], function (exports, _emberBabel)
         }
         return index;
     }
+    function getQueueItems(items, queueItemLength) {
+        var queueItemPositionOffset = arguments.length > 2 && arguments[2] !== undefined ? arguments[2] : 0;
+
+        var queueItems = [];
+        for (var i = 0; i < items.length; i += queueItemLength) {
+            var maybeError = items[i + 3 /* stack */ + queueItemPositionOffset];
+            var queueItem = {
+                target: items[i + 0 /* target */ + queueItemPositionOffset],
+                method: items[i + 1 /* method */ + queueItemPositionOffset],
+                args: items[i + 2 /* args */ + queueItemPositionOffset],
+                stack: maybeError !== undefined && 'stack' in maybeError ? maybeError.stack : ''
+            };
+            queueItems.push(queueItem);
+        }
+        return queueItems;
+    }
 
     function binarySearch(time, timers) {
         var start = 0;
-        var end = timers.length - 6;
+        var end = timers.length - TIMERS_OFFSET;
         var middle = void 0;
         var l = void 0;
         while (start < end) {
             // since timers is an array of pairs 'l' will always
             // be an integer
-            l = (end - start) / 6;
+            l = (end - start) / TIMERS_OFFSET;
             // compensate for the index in case even number
             // of pairs inside timers
-            middle = start + l - l % 6;
+            middle = start + l - l % TIMERS_OFFSET;
             if (time >= timers[middle]) {
-                start = middle + 6;
+                start = middle + TIMERS_OFFSET;
             } else {
                 end = middle;
             }
         }
-        return time >= timers[start] ? start + 6 : start;
+        return time >= timers[start] ? start + TIMERS_OFFSET : start;
     }
+
+    var QUEUE_ITEM_LENGTH = 4;
 
     var Queue = function () {
         function Queue(name) {
@@ -27420,7 +27580,7 @@ enifed('backburner', ['exports', 'ember-babel'], function (exports, _emberBabel)
 
         Queue.prototype.stackFor = function stackFor(index) {
             if (index < this._queue.length) {
-                var entry = this._queue[index * 3 + 4];
+                var entry = this._queue[index * 3 + QUEUE_ITEM_LENGTH];
                 if (entry) {
                     return entry.stack;
                 } else {
@@ -27451,8 +27611,8 @@ enifed('backburner', ['exports', 'ember-babel'], function (exports, _emberBabel)
             if (queueItems.length > 0) {
                 var onError = getOnError(this.globalOptions);
                 invoke = onError ? this.invokeWithOnError : this.invoke;
-                for (var i = this.index; i < queueItems.length; i += 4) {
-                    this.index += 4;
+                for (var i = this.index; i < queueItems.length; i += QUEUE_ITEM_LENGTH) {
+                    this.index += QUEUE_ITEM_LENGTH;
                     method = queueItems[i + 1];
                     // method could have been nullified / canceled during flush
                     if (method !== null) {
@@ -27507,7 +27667,7 @@ enifed('backburner', ['exports', 'ember-babel'], function (exports, _emberBabel)
             }
             var index = findItem(target, method, queue);
             if (index > -1) {
-                queue.splice(index, 4);
+                queue.splice(index, QUEUE_ITEM_LENGTH);
                 return true;
             }
             // if not found in current queue
@@ -27538,7 +27698,7 @@ enifed('backburner', ['exports', 'ember-babel'], function (exports, _emberBabel)
             }
             var index = localQueueMap.get(method);
             if (index === undefined) {
-                var queueIndex = this._queue.push(target, method, args, stack) - 4;
+                var queueIndex = this._queue.push(target, method, args, stack) - QUEUE_ITEM_LENGTH;
                 localQueueMap.set(method, queueIndex);
             } else {
                 var queue = this._queue;
@@ -27550,6 +27710,14 @@ enifed('backburner', ['exports', 'ember-babel'], function (exports, _emberBabel)
                 target: target,
                 method: method
             };
+        };
+
+        Queue.prototype._getDebugInfo = function _getDebugInfo(debugEnabled) {
+            if (debugEnabled) {
+                var debugInfo = getQueueItems(this._queue, QUEUE_ITEM_LENGTH);
+                return debugInfo;
+            }
+            return undefined;
         };
 
         Queue.prototype.invoke = function invoke(target, method, args /*, onError, errorRecordedForStack */) {
@@ -27589,16 +27757,16 @@ enifed('backburner', ['exports', 'ember-babel'], function (exports, _emberBabel)
                 return queues;
             }, this.queues);
         }
-        /*
-          @method schedule
-          @param {String} queueName
-          @param {Any} target
-          @param {Any} method
-          @param {Any} args
-          @param {Boolean} onceFlag
-          @param {Any} stack
-          @return queue
-        */
+        /**
+         * @method schedule
+         * @param {String} queueName
+         * @param {Any} target
+         * @param {Any} method
+         * @param {Any} args
+         * @param {Boolean} onceFlag
+         * @param {Any} stack
+         * @return queue
+         */
 
 
         DeferredActionQueues.prototype.schedule = function schedule(queueName, target, method, args, onceFlag, stack) {
@@ -27638,6 +27806,24 @@ enifed('backburner', ['exports', 'ember-babel'], function (exports, _emberBabel)
                         }
                 }
             }
+        };
+
+        DeferredActionQueues.prototype._getDebugInfo = function _getDebugInfo(debugEnabled) {
+            if (debugEnabled) {
+                var debugInfo = {};
+                var queue = void 0;
+                var queueName = void 0;
+                var numberOfQueues = this.queueNames.length;
+                var i = 0;
+                while (i < numberOfQueues) {
+                    queueName = this.queueNames[i];
+                    queue = this.queues[queueName];
+                    debugInfo[queueName] = queue._getDebugInfo(debugEnabled);
+                    i++;
+                }
+                return debugInfo;
+            }
+            return;
         };
 
         return DeferredActionQueues;
@@ -27773,6 +27959,7 @@ enifed('backburner', ['exports', 'ember-babel'], function (exports, _emberBabel)
             this._timerTimeoutId = null;
             this._timers = [];
             this._autorun = null;
+            this._autorunStack = null;
             this.queueNames = queueNames;
             this.options = options || {};
             if (typeof this.options.defaultQueue === 'string') {
@@ -27790,6 +27977,7 @@ enifed('backburner', ['exports', 'ember-babel'], function (exports, _emberBabel)
                     return;
                 }
                 _this._autorun = null;
+                _this._autorunStack = null;
                 _this._end(true /* fromAutorun */);
             };
             var builder = this.options._buildPlatform || buildPlatform;
@@ -27991,7 +28179,8 @@ enifed('backburner', ['exports', 'ember-babel'], function (exports, _emberBabel)
                 _parseDebounceArgs2$ = _parseDebounceArgs2[4],
                 isImmediate = _parseDebounceArgs2$ === undefined ? false : _parseDebounceArgs2$;
 
-            var index = findTimerItem(target, method, this._timers);
+            var _timers = this._timers;
+            var index = findTimerItem(target, method, _timers);
             var timerId = void 0;
             if (index === -1) {
                 timerId = this._later(target, method, isImmediate ? DISABLE_SCHEDULE : args, wait);
@@ -27999,13 +28188,21 @@ enifed('backburner', ['exports', 'ember-babel'], function (exports, _emberBabel)
                     this._join(target, method, args);
                 }
             } else {
-                var executeAt = this._platform.now() + wait || this._timers[index];
-                this._timers[index] = executeAt;
+                var executeAt = this._platform.now() + wait;
                 var argIndex = index + 4;
-                if (this._timers[argIndex] !== DISABLE_SCHEDULE) {
-                    this._timers[argIndex] = args;
+                if (_timers[argIndex] === DISABLE_SCHEDULE) {
+                    args = DISABLE_SCHEDULE;
                 }
-                timerId = this._timers[index + 1];
+                timerId = _timers[index + 1];
+                var i = binarySearch(executeAt, _timers);
+                if (index + TIMERS_OFFSET === i) {
+                    _timers[index] = executeAt;
+                    _timers[argIndex] = args;
+                } else {
+                    var stack = this._timers[index + 5];
+                    this._timers.splice(i, 0, executeAt, timerId, target, method, args, stack);
+                    this._timers.splice(index, TIMERS_OFFSET);
+                }
                 if (index === 0) {
                     this._reinstallTimerTimeout();
                 }
@@ -28042,6 +28239,22 @@ enifed('backburner', ['exports', 'ember-babel'], function (exports, _emberBabel)
 
         Backburner.prototype.ensureInstance = function ensureInstance() {
             this._ensureInstance();
+        };
+
+        Backburner.prototype.getDebugInfo = function getDebugInfo() {
+            var _this2 = this;
+
+            if (this.DEBUG) {
+                return {
+                    autorun: this._autorunStack,
+                    counters: this.counters,
+                    timers: getQueueItems(this._timers, TIMERS_OFFSET, 2),
+                    instanceStack: [this.currentInstance].concat(this.instanceStack).map(function (deferredActionQueue) {
+                        return deferredActionQueue && deferredActionQueue._getDebugInfo(_this2.DEBUG);
+                    })
+                };
+            }
+            return undefined;
         };
 
         Backburner.prototype._end = function _end(fromAutorun) {
@@ -28109,6 +28322,7 @@ enifed('backburner', ['exports', 'ember-babel'], function (exports, _emberBabel)
             if (this._autorun !== null) {
                 this._platform.clearNext(this._autorun);
                 this._autorun = null;
+                this._autorunStack = null;
             }
         };
 
@@ -28123,19 +28337,17 @@ enifed('backburner', ['exports', 'ember-babel'], function (exports, _emberBabel)
                 // find position to insert
                 var i = binarySearch(executeAt, this._timers);
                 this._timers.splice(i, 0, executeAt, id, target, method, args, stack);
-                // we should be the new earliest timer if i == 0
-                if (i === 0) {
-                    this._reinstallTimerTimeout();
-                }
+                // always reinstall since it could be out of sync
+                this._reinstallTimerTimeout();
             }
             return id;
         };
 
         Backburner.prototype._cancelLaterTimer = function _cancelLaterTimer(timer) {
-            for (var i = 1; i < this._timers.length; i += 6) {
+            for (var i = 1; i < this._timers.length; i += TIMERS_OFFSET) {
                 if (this._timers[i] === timer) {
-                    this._timers.splice(i - 1, 6);
-                    if (i === 0) {
+                    this._timers.splice(i - 1, TIMERS_OFFSET);
+                    if (i === 1) {
                         this._reinstallTimerTimeout();
                     }
                     return true;
@@ -28168,7 +28380,7 @@ enifed('backburner', ['exports', 'ember-babel'], function (exports, _emberBabel)
             var l = timers.length;
             var defaultQueue = this._defaultQueue;
             var n = this._platform.now();
-            for (; i < l; i += 6) {
+            for (; i < l; i += TIMERS_OFFSET) {
                 var executeAt = timers[i];
                 if (executeAt > n) {
                     break;
@@ -28211,6 +28423,7 @@ enifed('backburner', ['exports', 'ember-babel'], function (exports, _emberBabel)
         Backburner.prototype._ensureInstance = function _ensureInstance() {
             var currentInstance = this.currentInstance;
             if (currentInstance === null) {
+                this._autorunStack = this.DEBUG ? new Error() : undefined;
                 currentInstance = this.begin();
                 this._scheduleAutorun();
             }
@@ -29764,7 +29977,6 @@ enifed("ember-error-handling/index", ["exports"], function (exports) {
     function setDispatchOverride(handler) {
         dispatchOverride = handler;
     }
-    //# sourceMappingURL=index.js.map
 });
 enifed('ember-extension-support/index', ['exports', 'ember-extension-support/lib/data_adapter', 'ember-extension-support/lib/container_debug_adapter'], function (exports, _data_adapter, _container_debug_adapter) {
   'use strict';
@@ -30394,7 +30606,7 @@ enifed('ember-glimmer', ['exports', '@glimmer/runtime', '@glimmer/util', '@glimm
       Each time the input to a helper changes, the `compute` function will be
       called again.
     
-      As instances, these helpers also have access to the container an will accept
+      As instances, these helpers also have access to the container and will accept
       injected dependencies.
     
       Additionally, class helpers can call `recompute` to force a new computation.
@@ -38739,7 +38951,6 @@ enifed('ember-meta/lib/meta', ['exports', 'ember-babel', '@ember/debug', '@ember
         }
         destination.push(target, method, source[index + 3]);
     }
-    //# sourceMappingURL=meta.js.map
 });
 enifed('ember-metal', ['exports', 'ember-babel', '@ember/polyfills', 'ember-utils', '@ember/debug', '@ember/deprecated-features', 'ember-environment', 'ember-meta', '@ember/runloop', '@glimmer/reference', '@ember/error', 'ember/version', 'ember-owner'], function (exports, _emberBabel, _polyfills, _emberUtils, _debug, _deprecatedFeatures, _emberEnvironment, _emberMeta, _runloop, _reference, _error, _version, _emberOwner) {
     'use strict';
@@ -39323,7 +39534,7 @@ enifed('ember-metal', ['exports', 'ember-babel', '@ember/polyfills', 'ember-util
       @param {String} keyName The property key (or path) that will change.
       @param {Meta} meta The objects meta.
       @return {void}
-      @private
+      @public
     */
     function notifyPropertyChange(obj, keyName, _meta) {
         var meta$$1 = _meta === undefined ? (0, _emberMeta.peekMeta)(obj) : _meta;
@@ -42981,7 +43192,6 @@ enifed('ember-owner/index', ['exports', 'ember-utils'], function (exports, _embe
   function setOwner(object, owner) {
     object[OWNER] = owner;
   }
-  //# sourceMappingURL=index.js.map
 });
 enifed('ember-routing/index', ['exports', 'ember-routing/lib/location/api', 'ember-routing/lib/location/none_location', 'ember-routing/lib/location/hash_location', 'ember-routing/lib/location/history_location', 'ember-routing/lib/location/auto_location', 'ember-routing/lib/system/generate_controller', 'ember-routing/lib/system/controller_for', 'ember-routing/lib/system/dsl', 'ember-routing/lib/system/router', 'ember-routing/lib/system/route', 'ember-routing/lib/system/query_params', 'ember-routing/lib/services/routing', 'ember-routing/lib/services/router', 'ember-routing/lib/system/cache', 'ember-routing/lib/ext/controller'], function (exports, _api, _none_location, _hash_location, _history_location, _auto_location, _generate_controller, _controller_for, _dsl, _router, _route, _query_params, _routing, _router2, _cache) {
   'use strict';
@@ -48557,6 +48767,10 @@ enifed('ember-runtime/lib/mixins/-proxy', ['exports', '@glimmer/reference', 'emb
       m.writableTag(function () {
         return (0, _reference.combine)([_reference.DirtyableTag.create(), _reference.UpdatableTag.create(_reference.CONSTANT_TAG)]);
       });
+    },
+    willDestroy: function () {
+      this.set('content', null);
+      this._super.apply(this, arguments);
     },
 
 
@@ -54542,10 +54756,10 @@ enifed('ember-views/lib/mixins/text_support', ['exports', 'ember-metal', 'ember-
 
       view.triggerAction({
         action: actionName,
-        actionContext: [value]
+        actionContext: [value, event]
       });
     } else if (typeof actionName === 'function') {
-      actionName(value);
+      actionName(value, event);
     }
 
     if (actionName && !(0, _emberMetal.get)(view, 'bubbles')) {
@@ -55277,23 +55491,18 @@ enifed('ember-views/lib/system/event_dispatcher', ['exports', 'ember-owner', '@e
             var target = event.target;
             var related = event.relatedTarget;
 
-            do {
-              // For mouseenter/leave call the handler if related is outside the target.
-              // No relatedTarget if the mouse left/entered the browser window
+            while (target && target.nodeType === 1 && (!related || related !== target && !target.contains(related))) {
+              // mouseEnter/Leave don't bubble, so there is no logic to prevent it as with other events
               if (viewRegistry[target.id]) {
-                if (!related || related !== target && !target.contains(related)) {
-                  viewHandler(target, createFakeEvent(origEventType, event));
-                }
-                break;
+                viewHandler(target, createFakeEvent(origEventType, event));
               } else if (target.hasAttribute('data-ember-action')) {
-                if (!related || related !== target && !target.contains(related)) {
-                  actionHandler(target, createFakeEvent(origEventType, event));
-                }
-                break;
+                actionHandler(target, createFakeEvent(origEventType, event));
               }
 
+              // separate mouseEnter/Leave events are dispatched for each listening element
+              // until the element (related) has been reached that the pointing device exited from/to
               target = target.parentNode;
-            } while (target && target.nodeType === 1);
+            }
           };
 
           rootElement.addEventListener(mappedEventType, handleMappedEvent);
@@ -56521,7 +56730,7 @@ enifed('ember/index', ['exports', 'require', 'ember-environment', 'node-module',
 enifed("ember/version", ["exports"], function (exports) {
   "use strict";
 
-  exports.default = "3.4.1";
+  exports.default = "3.4.8";
 });
 /*global enifed, module */
 enifed('node-module', ['exports'], function(_exports) {
@@ -61528,23 +61737,6 @@ requireModule('ember')
 
 }());
 
-;/* globals define */
-
-function createDeprecatedModule(moduleId) {
-  define(moduleId, ['exports', 'ember-resolver/resolver', 'ember'], function(exports, Resolver, Ember) {
-    Ember['default'].deprecate(
-      'Usage of `' + moduleId + '` module is deprecated, please update to `ember-resolver`.',
-      false,
-      { id: 'ember-resolver.legacy-shims', until: '3.0.0' }
-    );
-
-    exports['default'] = Resolver['default'];
-  });
-}
-
-createDeprecatedModule('ember/resolver');
-createDeprecatedModule('resolver');
-
 ;define('@ember/ordered-set/index', ['exports'], function (exports) {
   'use strict';
 
@@ -61715,156 +61907,202 @@ createDeprecatedModule('resolver');
   exports.default = OrderedSet;
 });
 ;define('ember-ajax/-private/promise', ['exports'], function (exports) {
-    'use strict';
+  'use strict';
 
-    Object.defineProperty(exports, "__esModule", {
-        value: true
-    });
+  Object.defineProperty(exports, "__esModule", {
+    value: true
+  });
 
+
+  /**
+   * AJAX Promise
+   *
+   * Sub-class of RSVP Promise that passes the XHR property on to the
+   * child promise
+   *
+   * @extends RSVP.Promise
+   * @private
+   */
+  class AJAXPromise extends Ember.RSVP.Promise {
     /**
-     * AJAX Promise
+     * Overriding `.then` to add XHR to child promise
      *
-     * Sub-class of RSVP Promise that passes the XHR property on to the
-     * child promise
-     *
-     * @extends RSVP.Promise
-     * @private
+     * @public
+     * @return {AJAXPromise} child promise
      */
-    class AJAXPromise extends Ember.RSVP.Promise {
-        // NOTE: Only necessary due to broken definition of RSVP.Promise
-        // https://github.com/DefinitelyTyped/DefinitelyTyped/pull/26640
-        constructor(executor, label) {
-            // @ts-ignore
-            super(executor, label);
-        }
-        /**
-         * Overriding `.then` to add XHR to child promise
-         */
-        then(onFulfilled, onRejected, label) {
-            const child = super.then(onFulfilled, onRejected, label);
-            child.xhr = this.xhr;
-            return child;
-        }
+    then() {
+      const child = super.then(...arguments);
+
+      child.xhr = this.xhr;
+
+      return child;
     }
-    exports.default = AJAXPromise;
-});
-;define("ember-ajax/-private/types", [], function () {
-  "use strict";
+  }
+  exports.default = AJAXPromise;
 });
 ;define('ember-ajax/-private/utils/get-header', ['exports'], function (exports) {
-    'use strict';
+  'use strict';
 
-    Object.defineProperty(exports, "__esModule", {
-        value: true
-    });
-    exports.default = getHeader;
+  Object.defineProperty(exports, "__esModule", {
+    value: true
+  });
+  exports.default = getHeader;
 
-    /**
-     * Do a case-insensitive lookup of an HTTP header
-     *
-     * @function getHeader
-     * @private
-     */
-    function getHeader(headers, name) {
-        if (Ember.isNone(headers) || Ember.isNone(name)) {
-            return undefined;
-        }
-        const matchedKey = Ember.A(Object.keys(headers)).find(key => {
-            return key.toLowerCase() === name.toLowerCase();
-        });
-        return matchedKey ? headers[matchedKey] : undefined;
+
+  /**
+   * Do a case-insensitive lookup of an HTTP header
+   *
+   * @function getHeader
+   * @private
+   * @param {Object} headers
+   * @param {string} name
+   * @return {string}
+   */
+  function getHeader(headers, name) {
+    if (Ember.isNone(headers) || Ember.isNone(name)) {
+      return; // ask for nothing, get nothing.
     }
+
+    const matchedKey = Ember.A(Object.keys(headers)).find(key => {
+      return key.toLowerCase() === name.toLowerCase();
+    });
+
+    return headers[matchedKey];
+  }
+});
+;define('ember-ajax/-private/utils/is-fastboot', ['exports'], function (exports) {
+  'use strict';
+
+  Object.defineProperty(exports, "__esModule", {
+    value: true
+  });
+  /* global FastBoot */
+  const isFastBoot = typeof FastBoot !== 'undefined';
+  exports.default = isFastBoot;
 });
 ;define('ember-ajax/-private/utils/is-string', ['exports'], function (exports) {
-    'use strict';
+  'use strict';
 
-    Object.defineProperty(exports, "__esModule", {
-        value: true
-    });
-    exports.default = isString;
-    function isString(object) {
-        return typeof object === 'string';
-    }
+  Object.defineProperty(exports, "__esModule", {
+    value: true
+  });
+  exports.default = isString;
+  function isString(object) {
+    return typeof object === 'string';
+  }
 });
 ;define('ember-ajax/-private/utils/parse-response-headers', ['exports'], function (exports) {
-    'use strict';
+  'use strict';
 
-    Object.defineProperty(exports, "__esModule", {
-        value: true
-    });
-    exports.default = parseResponseHeaders;
-    const CRLF = exports.CRLF = '\u000d\u000a';
-    function parseResponseHeaders(headersString) {
-        const headers = {};
-        if (!headersString) {
-            return headers;
-        }
-        return headersString.split(CRLF).reduce((hash, header) => {
-            let [field, ...value] = header.split(':');
-            field = field.trim();
-            const valueString = value.join(':').trim();
-            if (valueString) {
-                hash[field] = valueString;
-            }
-            return hash;
-        }, headers);
+  Object.defineProperty(exports, "__esModule", {
+    value: true
+  });
+  exports.default = parseResponseHeaders;
+  const CRLF = exports.CRLF = '\u000d\u000a';
+
+  function parseResponseHeaders(headersString) {
+    const headers = {};
+
+    if (!headersString) {
+      return headers;
     }
+
+    return headersString.split(CRLF).reduce((hash, header) => {
+      let [field, ...value] = header.split(':');
+
+      field = field.trim();
+      value = value.join(':').trim();
+
+      if (value) {
+        hash[field] = value;
+      }
+
+      return hash;
+    }, headers);
+  }
 });
-;define('ember-ajax/-private/utils/url-helpers', ['exports'], function (exports) {
-    'use strict';
+;define('ember-ajax/-private/utils/url-helpers', ['exports', 'require', 'ember-ajax/-private/utils/is-fastboot'], function (exports, _require2, _isFastboot) {
+  'use strict';
 
-    Object.defineProperty(exports, "__esModule", {
-        value: true
-    });
-    exports.parseURL = parseURL;
-    exports.isFullURL = isFullURL;
-    exports.haveSameHost = haveSameHost;
-    /* eslint-env browser, node */
-    const completeUrlRegex = /^(http|https)/;
-    /**
-     * Parse a URL string into an object that defines its structure
-     *
-     * The returned object will have the following properties:
-     *
-     *   href: the full URL
-     *   protocol: the request protocol
-     *   hostname: the target for the request
-     *   port: the port for the request
-     *   pathname: any URL after the host
-     *   search: query parameters
-     *   hash: the URL hash
-     *
-     * @function parseURL
-     * @private
-     */
-    function parseURL(str) {
-        let fullObject;
-        if (typeof FastBoot === 'undefined') {
-            const element = document.createElement('a');
-            element.href = str;
-            fullObject = element;
-        } else {
-            fullObject = FastBoot.require('url').parse(str);
-        }
-        const desiredProps = {
-            href: fullObject.href,
-            protocol: fullObject.protocol,
-            hostname: fullObject.hostname,
-            port: fullObject.port,
-            pathname: fullObject.pathname,
-            search: fullObject.search,
-            hash: fullObject.hash
-        };
-        return desiredProps;
+  Object.defineProperty(exports, "__esModule", {
+    value: true
+  });
+  exports.parseURL = parseURL;
+  exports.isFullURL = isFullURL;
+  exports.haveSameHost = haveSameHost;
+  /* eslint-env browser, node */
+
+  const completeUrlRegex = /^(http|https)/;
+
+  /*
+   * Isomorphic URL parsing
+   * Borrowed from
+   * http://www.sitepoint.com/url-parsing-isomorphic-javascript/
+   */
+  const isNode = typeof self === 'undefined' && typeof process !== 'undefined' && {}.toString.call(process) === '[object process]';
+
+  const url = function () {
+    if (_isFastboot.default) {
+      // ember-fastboot-server provides the node url module as URL global
+      return URL;
     }
-    function isFullURL(url) {
-        return !!url.match(completeUrlRegex);
+
+    if (isNode) {
+      return (0, _require2.default)('url');
     }
-    function haveSameHost(a, b) {
-        const urlA = parseURL(a);
-        const urlB = parseURL(b);
-        return urlA.protocol === urlB.protocol && urlA.hostname === urlB.hostname && urlA.port === urlB.port;
+
+    return document.createElement('a');
+  }();
+
+  /**
+   * Parse a URL string into an object that defines its structure
+   *
+   * The returned object will have the following properties:
+   *
+   *   href: the full URL
+   *   protocol: the request protocol
+   *   hostname: the target for the request
+   *   port: the port for the request
+   *   pathname: any URL after the host
+   *   search: query parameters
+   *   hash: the URL hash
+   *
+   * @function parseURL
+   * @private
+   * @param {string} str The string to parse
+   * @return {Object} URL structure
+   */
+  function parseURL(str) {
+    let fullObject;
+
+    if (isNode || _isFastboot.default) {
+      fullObject = url.parse(str);
+    } else {
+      url.href = str;
+      fullObject = url;
     }
+
+    const desiredProps = {};
+    desiredProps.href = fullObject.href;
+    desiredProps.protocol = fullObject.protocol;
+    desiredProps.hostname = fullObject.hostname;
+    desiredProps.port = fullObject.port;
+    desiredProps.pathname = fullObject.pathname;
+    desiredProps.search = fullObject.search;
+    desiredProps.hash = fullObject.hash;
+    return desiredProps;
+  }
+
+  function isFullURL(url) {
+    return url.match(completeUrlRegex);
+  }
+
+  function haveSameHost(a, b) {
+    a = parseURL(a);
+    b = parseURL(b);
+
+    return a.protocol === b.protocol && a.hostname === b.hostname && a.port === b.port;
+  }
 });
 ;define('ember-ajax/ajax-request', ['exports', 'ember-ajax/mixins/ajax-request'], function (exports, _ajaxRequest) {
   'use strict';
@@ -61875,211 +62113,320 @@ createDeprecatedModule('resolver');
   exports.default = Ember.Object.extend(_ajaxRequest.default);
 });
 ;define('ember-ajax/errors', ['exports'], function (exports) {
-    'use strict';
+  'use strict';
 
-    Object.defineProperty(exports, "__esModule", {
-        value: true
-    });
-    exports.isAjaxError = isAjaxError;
-    exports.isUnauthorizedError = isUnauthorizedError;
-    exports.isForbiddenError = isForbiddenError;
-    exports.isInvalidError = isInvalidError;
-    exports.isBadRequestError = isBadRequestError;
-    exports.isNotFoundError = isNotFoundError;
-    exports.isGoneError = isGoneError;
-    exports.isTimeoutError = isTimeoutError;
-    exports.isAbortError = isAbortError;
-    exports.isConflictError = isConflictError;
-    exports.isServerError = isServerError;
-    exports.isSuccess = isSuccess;
-    class AjaxError extends Ember.Error {
-        constructor(payload, message = 'Ajax operation failed', status) {
-            super(message);
-            this.payload = payload;
-            this.status = status;
-        }
+  Object.defineProperty(exports, "__esModule", {
+    value: true
+  });
+  exports.AjaxError = AjaxError;
+  exports.InvalidError = InvalidError;
+  exports.UnauthorizedError = UnauthorizedError;
+  exports.ForbiddenError = ForbiddenError;
+  exports.BadRequestError = BadRequestError;
+  exports.NotFoundError = NotFoundError;
+  exports.TimeoutError = TimeoutError;
+  exports.AbortError = AbortError;
+  exports.ConflictError = ConflictError;
+  exports.ServerError = ServerError;
+  exports.isAjaxError = isAjaxError;
+  exports.isUnauthorizedError = isUnauthorizedError;
+  exports.isForbiddenError = isForbiddenError;
+  exports.isInvalidError = isInvalidError;
+  exports.isBadRequestError = isBadRequestError;
+  exports.isNotFoundError = isNotFoundError;
+  exports.isTimeoutError = isTimeoutError;
+  exports.isAbortError = isAbortError;
+  exports.isConflictError = isConflictError;
+  exports.isServerError = isServerError;
+  exports.isSuccess = isSuccess;
+
+
+  /**
+   * @class AjaxError
+   * @public
+   * @extends Ember.Error
+   */
+  function AjaxError(payload, message = 'Ajax operation failed', status) {
+    Ember.Error.call(this, message);
+
+    this.payload = payload;
+    this.status = status;
+  }
+
+  AjaxError.prototype = Object.create(Ember.Error.prototype);
+
+  /**
+   * @class InvalidError
+   * @public
+   * @extends AjaxError
+   */
+  function InvalidError(payload) {
+    AjaxError.call(this, payload, 'Request was rejected because it was invalid', 422);
+  }
+
+  InvalidError.prototype = Object.create(AjaxError.prototype);
+
+  /**
+   * @class UnauthorizedError
+   * @public
+   * @extends AjaxError
+   */
+  function UnauthorizedError(payload) {
+    AjaxError.call(this, payload, 'Ajax authorization failed', 401);
+  }
+
+  UnauthorizedError.prototype = Object.create(AjaxError.prototype);
+
+  /**
+   * @class ForbiddenError
+   * @public
+   * @extends AjaxError
+   */
+  function ForbiddenError(payload) {
+    AjaxError.call(this, payload, 'Request was rejected because user is not permitted to perform this operation.', 403);
+  }
+
+  ForbiddenError.prototype = Object.create(AjaxError.prototype);
+
+  /**
+   * @class BadRequestError
+   * @public
+   * @extends AjaxError
+   */
+  function BadRequestError(payload) {
+    AjaxError.call(this, payload, 'Request was formatted incorrectly.', 400);
+  }
+
+  BadRequestError.prototype = Object.create(AjaxError.prototype);
+
+  /**
+   * @class NotFoundError
+   * @public
+   * @extends AjaxError
+   */
+  function NotFoundError(payload) {
+    AjaxError.call(this, payload, 'Resource was not found.', 404);
+  }
+
+  NotFoundError.prototype = Object.create(AjaxError.prototype);
+
+  /**
+   * @class TimeoutError
+   * @public
+   * @extends AjaxError
+   */
+  function TimeoutError() {
+    AjaxError.call(this, null, 'The ajax operation timed out', -1);
+  }
+
+  TimeoutError.prototype = Object.create(AjaxError.prototype);
+
+  /**
+   * @class AbortError
+   * @public
+   * @extends AjaxError
+   */
+  function AbortError() {
+    AjaxError.call(this, null, 'The ajax operation was aborted', 0);
+  }
+
+  AbortError.prototype = Object.create(AjaxError.prototype);
+
+  /**
+   * @class ConflictError
+   * @public
+   * @extends AjaxError
+   */
+  function ConflictError(payload) {
+    AjaxError.call(this, payload, 'The ajax operation failed due to a conflict', 409);
+  }
+
+  ConflictError.prototype = Object.create(AjaxError.prototype);
+
+  /**
+   * @class ServerError
+   * @public
+   * @extends AjaxError
+   */
+  function ServerError(payload, status) {
+    AjaxError.call(this, payload, 'Request was rejected due to server error', status);
+  }
+
+  ServerError.prototype = Object.create(AjaxError.prototype);
+
+  /**
+   * Checks if the given error is or inherits from AjaxError
+   *
+   * @method isAjaxError
+   * @public
+   * @param  {Error} error
+   * @return {Boolean}
+   */
+  function isAjaxError(error) {
+    return error instanceof AjaxError;
+  }
+
+  /**
+   * Checks if the given status code or AjaxError object represents an
+   * unauthorized request error
+   *
+   * @method isUnauthorizedError
+   * @public
+   * @param  {Number | AjaxError} error
+   * @return {Boolean}
+   */
+  function isUnauthorizedError(error) {
+    if (isAjaxError(error)) {
+      return error instanceof UnauthorizedError;
+    } else {
+      return error === 401;
     }
-    exports.AjaxError = AjaxError;
-    class InvalidError extends AjaxError {
-        constructor(payload) {
-            super(payload, 'Request was rejected because it was invalid', 422);
-        }
+  }
+
+  /**
+   * Checks if the given status code or AjaxError object represents a forbidden
+   * request error
+   *
+   * @method isForbiddenError
+   * @public
+   * @param  {Number | AjaxError} error
+   * @return {Boolean}
+   */
+  function isForbiddenError(error) {
+    if (isAjaxError(error)) {
+      return error instanceof ForbiddenError;
+    } else {
+      return error === 403;
     }
-    exports.InvalidError = InvalidError;
-    class UnauthorizedError extends AjaxError {
-        constructor(payload) {
-            super(payload, 'Ajax authorization failed', 401);
-        }
+  }
+
+  /**
+   * Checks if the given status code or AjaxError object represents an invalid
+   * request error
+   *
+   * @method isInvalidError
+   * @public
+   * @param  {Number | AjaxError} error
+   * @return {Boolean}
+   */
+  function isInvalidError(error) {
+    if (isAjaxError(error)) {
+      return error instanceof InvalidError;
+    } else {
+      return error === 422;
     }
-    exports.UnauthorizedError = UnauthorizedError;
-    class ForbiddenError extends AjaxError {
-        constructor(payload) {
-            super(payload, 'Request was rejected because user is not permitted to perform this operation.', 403);
-        }
+  }
+
+  /**
+   * Checks if the given status code or AjaxError object represents a bad request
+   * error
+   *
+   * @method isBadRequestError
+   * @public
+   * @param  {Number | AjaxError} error
+   * @return {Boolean}
+   */
+  function isBadRequestError(error) {
+    if (isAjaxError(error)) {
+      return error instanceof BadRequestError;
+    } else {
+      return error === 400;
     }
-    exports.ForbiddenError = ForbiddenError;
-    class BadRequestError extends AjaxError {
-        constructor(payload) {
-            super(payload, 'Request was formatted incorrectly.', 400);
-        }
+  }
+
+  /**
+   * Checks if the given status code or AjaxError object represents a
+   * "not found" error
+   *
+   * @method isNotFoundError
+   * @public
+   * @param  {Number | AjaxError} error
+   * @return {Boolean}
+   */
+  function isNotFoundError(error) {
+    if (isAjaxError(error)) {
+      return error instanceof NotFoundError;
+    } else {
+      return error === 404;
     }
-    exports.BadRequestError = BadRequestError;
-    class NotFoundError extends AjaxError {
-        constructor(payload) {
-            super(payload, 'Resource was not found.', 404);
-        }
+  }
+
+  /**
+   * Checks if the given status code or AjaxError object represents a
+   * "timeout" error
+   *
+   * @method isTimeoutError
+   * @public
+   * @param  {AjaxError} error
+   * @return {Boolean}
+   */
+  function isTimeoutError(error) {
+    return error instanceof TimeoutError;
+  }
+
+  /**
+   * Checks if the given status code or AjaxError object represents an
+   * "abort" error
+   *
+   * @method isAbortError
+   * @public
+   * @param  {AjaxError} error
+   * @return {Boolean}
+   */
+  function isAbortError(error) {
+    if (isAjaxError(error)) {
+      return error instanceof AbortError;
+    } else {
+      return error === 0;
     }
-    exports.NotFoundError = NotFoundError;
-    class GoneError extends AjaxError {
-        constructor(payload) {
-            super(payload, 'Resource is no longer available.', 410);
-        }
+  }
+
+  /**
+   * Checks if the given status code or AjaxError object represents a
+   * conflict error
+   *
+   * @method isConflictError
+   * @public
+   * @param  {Number | AjaxError} error
+   * @return {Boolean}
+   */
+  function isConflictError(error) {
+    if (isAjaxError(error)) {
+      return error instanceof ConflictError;
+    } else {
+      return error === 409;
     }
-    exports.GoneError = GoneError;
-    class TimeoutError extends AjaxError {
-        constructor() {
-            super(null, 'The ajax operation timed out', -1);
-        }
+  }
+
+  /**
+   * Checks if the given status code or AjaxError object represents a server error
+   *
+   * @method isServerError
+   * @public
+   * @param  {Number | AjaxError} error
+   * @return {Boolean}
+   */
+  function isServerError(error) {
+    if (isAjaxError(error)) {
+      return error instanceof ServerError;
+    } else {
+      return error >= 500 && error < 600;
     }
-    exports.TimeoutError = TimeoutError;
-    class AbortError extends AjaxError {
-        constructor() {
-            super(null, 'The ajax operation was aborted', 0);
-        }
-    }
-    exports.AbortError = AbortError;
-    class ConflictError extends AjaxError {
-        constructor(payload) {
-            super(payload, 'The ajax operation failed due to a conflict', 409);
-        }
-    }
-    exports.ConflictError = ConflictError;
-    class ServerError extends AjaxError {
-        constructor(payload, status) {
-            super(payload, 'Request was rejected due to server error', status);
-        }
-    }
-    exports.ServerError = ServerError;
-    /**
-     * Checks if the given error is or inherits from AjaxError
-     */
-    function isAjaxError(error) {
-        return error instanceof AjaxError;
-    }
-    /**
-     * Checks if the given status code or AjaxError object represents an
-     * unauthorized request error
-     */
-    function isUnauthorizedError(error) {
-        if (isAjaxError(error)) {
-            return error instanceof UnauthorizedError;
-        } else {
-            return error === 401;
-        }
-    }
-    /**
-     * Checks if the given status code or AjaxError object represents a forbidden
-     * request error
-     */
-    function isForbiddenError(error) {
-        if (isAjaxError(error)) {
-            return error instanceof ForbiddenError;
-        } else {
-            return error === 403;
-        }
-    }
-    /**
-     * Checks if the given status code or AjaxError object represents an invalid
-     * request error
-     */
-    function isInvalidError(error) {
-        if (isAjaxError(error)) {
-            return error instanceof InvalidError;
-        } else {
-            return error === 422;
-        }
-    }
-    /**
-     * Checks if the given status code or AjaxError object represents a bad request
-     * error
-     */
-    function isBadRequestError(error) {
-        if (isAjaxError(error)) {
-            return error instanceof BadRequestError;
-        } else {
-            return error === 400;
-        }
-    }
-    /**
-     * Checks if the given status code or AjaxError object represents a "not found"
-     * error
-     */
-    function isNotFoundError(error) {
-        if (isAjaxError(error)) {
-            return error instanceof NotFoundError;
-        } else {
-            return error === 404;
-        }
-    }
-    /**
-     * Checks if the given status code or AjaxError object represents a "gone"
-     * error
-     */
-    function isGoneError(error) {
-        if (isAjaxError(error)) {
-            return error instanceof GoneError;
-        } else {
-            return error === 410;
-        }
-    }
-    /**
-     * Checks if the given object represents a "timeout" error
-     */
-    function isTimeoutError(error) {
-        return error instanceof TimeoutError;
-    }
-    /**
-     * Checks if the given status code or AjaxError object represents an
-     * "abort" error
-     */
-    function isAbortError(error) {
-        if (isAjaxError(error)) {
-            return error instanceof AbortError;
-        } else {
-            return error === 0;
-        }
-    }
-    /**
-     * Checks if the given status code or AjaxError object represents a
-     * conflict error
-     */
-    function isConflictError(error) {
-        if (isAjaxError(error)) {
-            return error instanceof ConflictError;
-        } else {
-            return error === 409;
-        }
-    }
-    /**
-     * Checks if the given status code or AjaxError object represents a server error
-     */
-    function isServerError(error) {
-        if (isAjaxError(error)) {
-            return error instanceof ServerError;
-        } else {
-            return error >= 500 && error < 600;
-        }
-    }
-    /**
-     * Checks if the given status code represents a successful request
-     */
-    function isSuccess(status) {
-        let s = status;
-        if (typeof status === 'string') {
-            s = parseInt(status, 10);
-        }
-        return s >= 200 && s < 300 || s === 304;
-    }
+  }
+
+  /**
+   * Checks if the given status code represents a successful request
+   *
+   * @method isSuccess
+   * @public
+   * @param  {Number} status
+   * @return {Boolean}
+   */
+  function isSuccess(status) {
+    const s = parseInt(status, 10);
+
+    return s >= 200 && s < 300 || s === 304;
+  }
 });
 ;define('ember-ajax/index', ['exports', 'ember-ajax/request'], function (exports, _request) {
   'use strict';
@@ -62095,556 +62442,763 @@ createDeprecatedModule('resolver');
   });
 });
 ;define('ember-ajax/mixins/ajax-request', ['exports', 'ember-ajax/errors', 'ember-ajax/utils/ajax', 'ember-ajax/-private/utils/parse-response-headers', 'ember-ajax/-private/utils/get-header', 'ember-ajax/-private/utils/url-helpers', 'ember-ajax/-private/utils/is-string', 'ember-ajax/-private/promise'], function (exports, _errors, _ajax, _parseResponseHeaders, _getHeader, _urlHelpers, _isString, _promise) {
-    'use strict';
+  'use strict';
 
-    Object.defineProperty(exports, "__esModule", {
-        value: true
+  Object.defineProperty(exports, "__esModule", {
+    value: true
+  });
+
+
+  const { Logger, Test, testing } = Ember;
+  const JSONContentType = /^application\/(?:vnd\.api\+)?json/i;
+
+  function isJSONContentType(header) {
+    if (!(0, _isString.default)(header)) {
+      return false;
+    }
+    return !!header.match(JSONContentType);
+  }
+
+  function isJSONStringifyable(method, { contentType, data, headers }) {
+    if (method === 'GET') {
+      return false;
+    }
+
+    if (!isJSONContentType(contentType) && !isJSONContentType((0, _getHeader.default)(headers, 'Content-Type'))) {
+      return false;
+    }
+
+    if (typeof data !== 'object') {
+      return false;
+    }
+
+    return true;
+  }
+
+  function startsWithSlash(string) {
+    return string.charAt(0) === '/';
+  }
+
+  function endsWithSlash(string) {
+    return string.charAt(string.length - 1) === '/';
+  }
+
+  function removeLeadingSlash(string) {
+    return string.substring(1);
+  }
+
+  function stripSlashes(path) {
+    // make sure path starts with `/`
+    if (startsWithSlash(path)) {
+      path = removeLeadingSlash(path);
+    }
+
+    // remove end `/`
+    if (endsWithSlash(path)) {
+      path = path.slice(0, -1);
+    }
+    return path;
+  }
+
+  let pendingRequestCount = 0;
+  if (testing) {
+    Test.registerWaiter(function () {
+      return pendingRequestCount === 0;
     });
+  }
 
-    const { Test } = Ember;
-    const JSONContentType = /^application\/(?:vnd\.api\+)?json/i;
-    function isJSONContentType(header) {
-        if (!(0, _isString.default)(header)) {
-            return false;
-        }
-        return !!header.match(JSONContentType);
-    }
-    function isJSONStringifyable(method, { contentType, data, headers }) {
-        if (method === 'GET') {
-            return false;
-        }
-        if (!isJSONContentType(contentType) && !isJSONContentType((0, _getHeader.default)(headers, 'Content-Type'))) {
-            return false;
-        }
-        if (typeof data !== 'object') {
-            return false;
-        }
-        return true;
-    }
-    function startsWithSlash(string) {
-        return string.charAt(0) === '/';
-    }
-    function endsWithSlash(string) {
-        return string.charAt(string.length - 1) === '/';
-    }
-    function removeLeadingSlash(string) {
-        return string.substring(1);
-    }
-    function removeTrailingSlash(string) {
-        return string.slice(0, -1);
-    }
-    function stripSlashes(path) {
-        // make sure path starts with `/`
-        if (startsWithSlash(path)) {
-            path = removeLeadingSlash(path);
-        }
-        // remove end `/`
-        if (endsWithSlash(path)) {
-            path = removeTrailingSlash(path);
-        }
-        return path;
-    }
-    let pendingRequestCount = 0;
-    if (Ember.testing) {
-        Test.registerWaiter(function () {
-            return pendingRequestCount === 0;
-        });
-    }
+  /**
+   * AjaxRequest Mixin
+   *
+   * @public
+   * @mixin
+   */
+  exports.default = Ember.Mixin.create({
     /**
-     * AjaxRequest Mixin
+     * The default value for the request `contentType`
+     *
+     * For now, defaults to the same value that jQuery would assign.  In the
+     * future, the default value will be for JSON requests.
+     * @property {string} contentType
+     * @public
+     * @default
      */
-    exports.default = Ember.Mixin.create({
-        /**
-         * The default value for the request `contentType`
-         *
-         * For now, defaults to the same value that jQuery would assign.  In the
-         * future, the default value will be for JSON requests.
-         * @property {string} contentType
-         * @public
-         */
-        contentType: 'application/x-www-form-urlencoded; charset=UTF-8',
-        /**
-         * Headers to include on the request
-         *
-         * Some APIs require HTTP headers, e.g. to provide an API key. Arbitrary
-         * headers can be set as key/value pairs on the `RESTAdapter`'s `headers`
-         * object and Ember Data will send them along with each ajax request.
-         *
-         * ```javascript
-         * // app/services/ajax.js
-         * import AjaxService from 'ember-ajax/services/ajax';
-         *
-         * export default AjaxService.extend({
-         *   headers: {
-         *     'API_KEY': 'secret key',
-         *     'ANOTHER_HEADER': 'Some header value'
-         *   }
-         * });
-         * ```
-         *
-         * `headers` can also be used as a computed property to support dynamic
-         * headers.
-         *
-         * ```javascript
-         * // app/services/ajax.js
-         * import Ember from 'ember';
-         * import AjaxService from 'ember-ajax/services/ajax';
-         *
-         * const {
-         *   computed,
-         *   get,
-         *   inject: { service }
-         * } = Ember;
-         *
-         * export default AjaxService.extend({
-         *   session: service(),
-         *   headers: computed('session.authToken', function() {
-         *     return {
-         *       'API_KEY': get(this, 'session.authToken'),
-         *       'ANOTHER_HEADER': 'Some header value'
-         *     };
-         *   })
-         * });
-         * ```
-         *
-         * In some cases, your dynamic headers may require data from some object
-         * outside of Ember's observer system (for example `document.cookie`). You
-         * can use the `volatile` function to set the property into a non-cached mode
-         * causing the headers to be recomputed with every request.
-         *
-         * ```javascript
-         * // app/services/ajax.js
-         * import Ember from 'ember';
-         * import AjaxService from 'ember-ajax/services/ajax';
-         *
-         * const {
-         *   computed,
-         *   get,
-         *   inject: { service }
-         * } = Ember;
-         *
-         * export default AjaxService.extend({
-         *   session: service(),
-         *   headers: computed('session.authToken', function() {
-         *     return {
-         *       'API_KEY': get(document.cookie.match(/apiKey\=([^;]*)/), '1'),
-         *       'ANOTHER_HEADER': 'Some header value'
-         *     };
-         *   }).volatile()
-         * });
-         * ```
-         *
-         * @property {Headers} headers
-         * @public
-         */
-        headers: undefined,
-        /**
-         * @property {string} host
-         * @public
-         */
-        host: undefined,
-        /**
-         * @property {string} namespace
-         * @public
-         */
-        namespace: undefined,
-        /**
-         * @property {Matcher[]} trustedHosts
-         * @public
-         */
-        trustedHosts: undefined,
-        /**
-         * Make an AJAX request, ignoring the raw XHR object and dealing only with
-         * the response
-         */
-        request(url, options) {
-            const hash = this.options(url, options);
-            const internalPromise = this._makeRequest(hash);
-            const ajaxPromise = new _promise.default((resolve, reject) => {
-                internalPromise.then(({ response }) => {
-                    resolve(response);
-                }).catch(({ response }) => {
-                    reject(response);
-                });
-            }, `ember-ajax: ${hash.type} ${hash.url} response`);
-            ajaxPromise.xhr = internalPromise.xhr;
-            return ajaxPromise;
-        },
-        /**
-         * Make an AJAX request, returning the raw XHR object along with the response
-         */
-        raw(url, options) {
-            const hash = this.options(url, options);
-            return this._makeRequest(hash);
-        },
-        /**
-         * Shared method to actually make an AJAX request
-         */
-        _makeRequest(hash) {
-            const method = hash.method || hash.type || 'GET';
-            const requestData = { method, type: method, url: hash.url };
-            if (isJSONStringifyable(method, hash)) {
-                hash.data = JSON.stringify(hash.data);
-            }
-            pendingRequestCount = pendingRequestCount + 1;
-            const jqXHR = (0, _ajax.default)(hash.url, hash);
-            const promise = new _promise.default((resolve, reject) => {
-                jqXHR.done((payload, textStatus, jqXHR) => {
-                    const response = this.handleResponse(jqXHR.status, (0, _parseResponseHeaders.default)(jqXHR.getAllResponseHeaders()), payload, requestData);
-                    if ((0, _errors.isAjaxError)(response)) {
-                        const rejectionParam = {
-                            payload,
-                            textStatus,
-                            jqXHR,
-                            response
-                        };
-                        Ember.run.join(null, reject, rejectionParam);
-                    } else {
-                        const resolutionParam = {
-                            payload,
-                            textStatus,
-                            jqXHR,
-                            response
-                        };
-                        Ember.run.join(null, resolve, resolutionParam);
-                    }
-                }).fail((jqXHR, textStatus, errorThrown) => {
-                    Ember.runInDebug(function () {
-                        const message = `The server returned an empty string for ${requestData.type} ${requestData.url}, which cannot be parsed into a valid JSON. Return either null or {}.`;
-                        const validJSONString = !(textStatus === 'parsererror' && jqXHR.responseText === '');
-                        (true && Ember.warn(message, validJSONString, {
-                            id: 'ds.adapter.returned-empty-string-as-JSON'
-                        }));
-                    });
-                    const payload = this.parseErrorResponse(jqXHR.responseText) || errorThrown;
-                    let response;
-                    if (textStatus === 'timeout') {
-                        response = new _errors.TimeoutError();
-                    } else if (textStatus === 'abort') {
-                        response = new _errors.AbortError();
-                    } else {
-                        response = this.handleResponse(jqXHR.status, (0, _parseResponseHeaders.default)(jqXHR.getAllResponseHeaders()), payload, requestData);
-                    }
-                    const rejectionParam = {
-                        payload,
-                        textStatus,
-                        jqXHR,
-                        errorThrown,
-                        response
-                    };
-                    Ember.run.join(null, reject, rejectionParam);
-                }).always(() => {
-                    pendingRequestCount = pendingRequestCount - 1;
-                });
-            }, `ember-ajax: ${hash.type} ${hash.url}`);
-            promise.xhr = jqXHR;
-            return promise;
-        },
-        /**
-         * calls `request()` but forces `options.type` to `POST`
-         */
-        post(url, options) {
-            return this.request(url, this._addTypeToOptionsFor(options, 'POST'));
-        },
-        /**
-         * calls `request()` but forces `options.type` to `PUT`
-         */
-        put(url, options) {
-            return this.request(url, this._addTypeToOptionsFor(options, 'PUT'));
-        },
-        /**
-         * calls `request()` but forces `options.type` to `PATCH`
-         */
-        patch(url, options) {
-            return this.request(url, this._addTypeToOptionsFor(options, 'PATCH'));
-        },
-        /**
-         * calls `request()` but forces `options.type` to `DELETE`
-         */
-        del(url, options) {
-            return this.request(url, this._addTypeToOptionsFor(options, 'DELETE'));
-        },
-        /**
-         * calls `request()` but forces `options.type` to `DELETE`
-         *
-         * Alias for `del()`
-         */
-        delete(url, options) {
-            return this.del(url, options);
-        },
-        /**
-         * Wrap the `.get` method so that we issue a warning if
-         *
-         * Since `.get` is both an AJAX pattern _and_ an Ember pattern, we want to try
-         * to warn users when they try using `.get` to make a request
-         */
-        get(url) {
-            if (arguments.length > 1 || url.indexOf('/') !== -1) {
-                throw new Ember.Error('It seems you tried to use `.get` to make a request! Use the `.request` method instead.');
-            }
-            return this._super(...arguments);
-        },
-        /**
-         * Manipulates the options hash to include the HTTP method on the type key
-         */
-        _addTypeToOptionsFor(options, method) {
-            options = options || {};
-            options.type = method;
-            return options;
-        },
-        /**
-         * Get the full "headers" hash, combining the service-defined headers with
-         * the ones provided for the request
-         */
-        _getFullHeadersHash(headers) {
-            const classHeaders = Ember.get(this, 'headers');
-            return Ember.assign({}, classHeaders, headers);
-        },
-        /**
-         * Created a normalized set of options from the per-request and
-         * service-level settings
-         */
-        options(url, options = {}) {
-            options = Ember.assign({}, options);
-            options.url = this._buildURL(url, options);
-            options.type = options.type || 'GET';
-            options.dataType = options.dataType || 'json';
-            options.contentType = Ember.isEmpty(options.contentType) ? Ember.get(this, 'contentType') : options.contentType;
-            if (this._shouldSendHeaders(options)) {
-                options.headers = this._getFullHeadersHash(options.headers);
-            } else {
-                options.headers = options.headers || {};
-            }
-            return options;
-        },
-        /**
-         * Build a URL for a request
-         *
-         * If the provided `url` is deemed to be a complete URL, it will be returned
-         * directly.  If it is not complete, then the segment provided will be combined
-         * with the `host` and `namespace` options of the request class to create the
-         * full URL.
-         */
-        _buildURL(url, options = {}) {
-            if ((0, _urlHelpers.isFullURL)(url)) {
-                return url;
-            }
-            const urlParts = [];
-            let host = options.host || Ember.get(this, 'host');
-            if (host) {
-                host = endsWithSlash(host) ? removeTrailingSlash(host) : host;
-                urlParts.push(host);
-            }
-            let namespace = options.namespace || Ember.get(this, 'namespace');
-            if (namespace) {
-                // If the URL has already been constructed (presumably, by Ember Data), then we should just leave it alone
-                const hasNamespaceRegex = new RegExp(`^(/)?${stripSlashes(namespace)}/`);
-                if (hasNamespaceRegex.test(url)) {
-                    return url;
-                }
-                // If host is given then we need to strip leading slash too( as it will be added through join)
-                if (host) {
-                    namespace = stripSlashes(namespace);
-                } else if (endsWithSlash(namespace)) {
-                    namespace = removeTrailingSlash(namespace);
-                }
-                urlParts.push(namespace);
-            }
-            // *Only* remove a leading slash when there is host or namespace -- we need to maintain a trailing slash for
-            // APIs that differentiate between it being and not being present
-            if (startsWithSlash(url) && urlParts.length !== 0) {
-                url = removeLeadingSlash(url);
-            }
-            urlParts.push(url);
-            return urlParts.join('/');
-        },
-        /**
-         * Takes an ajax response, and returns the json payload or an error.
-         *
-         * By default this hook just returns the json payload passed to it.
-         * You might want to override it in two cases:
-         *
-         * 1. Your API might return useful results in the response headers.
-         *    Response headers are passed in as the second argument.
-         *
-         * 2. Your API might return errors as successful responses with status code
-         *    200 and an Errors text or object.
-         */
-        handleResponse(status, headers, payload, requestData) {
-            if (this.isSuccess(status, headers, payload)) {
-                return payload;
-            }
-            // Allow overriding of error payload
-            payload = this.normalizeErrorResponse(status, headers, payload);
-            return this._createCorrectError(status, headers, payload, requestData);
-        },
-        _createCorrectError(status, headers, payload, requestData) {
-            let error;
-            if (this.isUnauthorizedError(status, headers, payload)) {
-                error = new _errors.UnauthorizedError(payload);
-            } else if (this.isForbiddenError(status, headers, payload)) {
-                error = new _errors.ForbiddenError(payload);
-            } else if (this.isInvalidError(status, headers, payload)) {
-                error = new _errors.InvalidError(payload);
-            } else if (this.isBadRequestError(status, headers, payload)) {
-                error = new _errors.BadRequestError(payload);
-            } else if (this.isNotFoundError(status, headers, payload)) {
-                error = new _errors.NotFoundError(payload);
-            } else if (this.isGoneError(status, headers, payload)) {
-                error = new _errors.GoneError(payload);
-            } else if (this.isAbortError(status, headers, payload)) {
-                error = new _errors.AbortError();
-            } else if (this.isConflictError(status, headers, payload)) {
-                error = new _errors.ConflictError(payload);
-            } else if (this.isServerError(status, headers, payload)) {
-                error = new _errors.ServerError(payload, status);
-            } else {
-                const detailedMessage = this.generateDetailedMessage(status, headers, payload, requestData);
-                error = new _errors.AjaxError(payload, detailedMessage, status);
-            }
-            return error;
-        },
-        /**
-         * Match the host to a provided array of strings or regexes that can match to a host
-         */
-        _matchHosts(host, matcher) {
-            if (!(0, _isString.default)(host)) {
-                return false;
-            }
-            if (matcher instanceof RegExp) {
-                return matcher.test(host);
-            } else if (typeof matcher === 'string') {
-                return matcher === host;
-            } else {
-                console.warn('trustedHosts only handles strings or regexes. ', matcher, ' is neither.');
-                return false;
-            }
-        },
-        /**
-         * Determine whether the headers should be added for this request
-         *
-         * This hook is used to help prevent sending headers to every host, regardless
-         * of the destination, since this could be a security issue if authentication
-         * tokens are accidentally leaked to third parties.
-         *
-         * To avoid that problem, subclasses should utilize the `headers` computed
-         * property to prevent authentication from being sent to third parties, or
-         * implement this hook for more fine-grain control over when headers are sent.
-         *
-         * By default, the headers are sent if the host of the request matches the
-         * `host` property designated on the class.
-         */
-        _shouldSendHeaders({ url, host }) {
-            url = url || '';
-            host = host || Ember.get(this, 'host') || '';
-            const trustedHosts = Ember.get(this, 'trustedHosts') || Ember.A();
-            const { hostname } = (0, _urlHelpers.parseURL)(url);
-            // Add headers on relative URLs
-            if (!(0, _urlHelpers.isFullURL)(url)) {
-                return true;
-            } else if (trustedHosts.find(matcher => this._matchHosts(hostname, matcher))) {
-                return true;
-            }
-            // Add headers on matching host
-            return (0, _urlHelpers.haveSameHost)(url, host);
-        },
-        /**
-         * Generates a detailed ("friendly") error message, with plenty
-         * of information for debugging (good luck!)
-         */
-        generateDetailedMessage(status, headers, payload, requestData) {
-            let shortenedPayload;
-            const payloadContentType = (0, _getHeader.default)(headers, 'Content-Type') || 'Empty Content-Type';
-            if (payloadContentType.toLowerCase() === 'text/html' && payload.length > 250) {
-                shortenedPayload = '[Omitted Lengthy HTML]';
-            } else {
-                shortenedPayload = JSON.stringify(payload);
-            }
-            const requestDescription = `${requestData.type} ${requestData.url}`;
-            const payloadDescription = `Payload (${payloadContentType})`;
-            return [`Ember AJAX Request ${requestDescription} returned a ${status}`, payloadDescription, shortenedPayload].join('\n');
-        },
-        /**
-         * Default `handleResponse` implementation uses this hook to decide if the
-         * response is a an authorized error.
-         */
-        isUnauthorizedError(status, _headers, _payload) {
-            return (0, _errors.isUnauthorizedError)(status);
-        },
-        /**
-         * Default `handleResponse` implementation uses this hook to decide if the
-         * response is a forbidden error.
-         */
-        isForbiddenError(status, _headers, _payload) {
-            return (0, _errors.isForbiddenError)(status);
-        },
-        /**
-         * Default `handleResponse` implementation uses this hook to decide if the
-         * response is a an invalid error.
-         */
-        isInvalidError(status, _headers, _payload) {
-            return (0, _errors.isInvalidError)(status);
-        },
-        /**
-         * Default `handleResponse` implementation uses this hook to decide if the
-         * response is a bad request error.
-         */
-        isBadRequestError(status, _headers, _payload) {
-            return (0, _errors.isBadRequestError)(status);
-        },
-        /**
-         * Default `handleResponse` implementation uses this hook to decide if the
-         * response is a "not found" error.
-         */
-        isNotFoundError(status, _headers, _payload) {
-            return (0, _errors.isNotFoundError)(status);
-        },
-        /**
-         * Default `handleResponse` implementation uses this hook to decide if the
-         * response is a "gone" error.
-         */
-        isGoneError(status, _headers, _payload) {
-            return (0, _errors.isGoneError)(status);
-        },
-        /**
-         * Default `handleResponse` implementation uses this hook to decide if the
-         * response is an "abort" error.
-         */
-        isAbortError(status, _headers, _payload) {
-            return (0, _errors.isAbortError)(status);
-        },
-        /**
-         * Default `handleResponse` implementation uses this hook to decide if the
-         * response is a "conflict" error.
-         */
-        isConflictError(status, _headers, _payload) {
-            return (0, _errors.isConflictError)(status);
-        },
-        /**
-         * Default `handleResponse` implementation uses this hook to decide if the
-         * response is a server error.
-         */
-        isServerError(status, _headers, _payload) {
-            return (0, _errors.isServerError)(status);
-        },
-        /**
-         * Default `handleResponse` implementation uses this hook to decide if the
-         * response is a success.
-         */
-        isSuccess(status, _headers, _payload) {
-            return (0, _errors.isSuccess)(status);
-        },
-        parseErrorResponse(responseText) {
-            try {
-                return JSON.parse(responseText);
-            } catch (e) {
-                return responseText;
-            }
-        },
-        normalizeErrorResponse(_status, _headers, payload) {
-            return payload;
-        }
-    });
+    contentType: 'application/x-www-form-urlencoded; charset=UTF-8',
+
+    /**
+     * Headers to include on the request
+     *
+     * Some APIs require HTTP headers, e.g. to provide an API key. Arbitrary
+     * headers can be set as key/value pairs on the `RESTAdapter`'s `headers`
+     * object and Ember Data will send them along with each ajax request.
+     *
+     * ```javascript
+     * // app/services/ajax.js
+     * import AjaxService from 'ember-ajax/services/ajax';
+     *
+     * export default AjaxService.extend({
+     *   headers: {
+     *     'API_KEY': 'secret key',
+     *     'ANOTHER_HEADER': 'Some header value'
+     *   }
+     * });
+     * ```
+     *
+     * `headers` can also be used as a computed property to support dynamic
+     * headers.
+     *
+     * ```javascript
+     * // app/services/ajax.js
+     * import Ember from 'ember';
+     * import AjaxService from 'ember-ajax/services/ajax';
+     *
+     * const {
+     *   computed,
+     *   get,
+     *   inject: { service }
+     * } = Ember;
+     *
+     * export default AjaxService.extend({
+     *   session: service(),
+     *   headers: computed('session.authToken', function() {
+     *     return {
+     *       'API_KEY': get(this, 'session.authToken'),
+     *       'ANOTHER_HEADER': 'Some header value'
+     *     };
+     *   })
+     * });
+     * ```
+     *
+     * In some cases, your dynamic headers may require data from some object
+     * outside of Ember's observer system (for example `document.cookie`). You
+     * can use the `volatile` function to set the property into a non-cached mode
+     * causing the headers to be recomputed with every request.
+     *
+     * ```javascript
+     * // app/services/ajax.js
+     * import Ember from 'ember';
+     * import AjaxService from 'ember-ajax/services/ajax';
+     *
+     * const {
+     *   computed,
+     *   get,
+     *   inject: { service }
+     * } = Ember;
+     *
+     * export default AjaxService.extend({
+     *   session: service(),
+     *   headers: computed('session.authToken', function() {
+     *     return {
+     *       'API_KEY': get(document.cookie.match(/apiKey\=([^;]*)/), '1'),
+     *       'ANOTHER_HEADER': 'Some header value'
+     *     };
+     *   }).volatile()
+     * });
+     * ```
+     *
+     * @property {Object} headers
+     * @public
+     * @default
+     */
+    headers: {},
+
+    /**
+     * Make an AJAX request, ignoring the raw XHR object and dealing only with
+     * the response
+     *
+     * @method request
+     * @public
+     * @param {string} url The url to make a request to
+     * @param {Object} options The options for the request
+     * @return {Promise} The result of the request
+     */
+    request(url, options) {
+      const hash = this.options(url, options);
+      const internalPromise = this._makeRequest(hash);
+
+      const ajaxPromise = new _promise.default((resolve, reject) => {
+        internalPromise.then(({ response }) => {
+          resolve(response);
+        }).catch(({ response }) => {
+          reject(response);
+        });
+      }, `ember-ajax: ${hash.type} ${hash.url} response`);
+
+      ajaxPromise.xhr = internalPromise.xhr;
+
+      return ajaxPromise;
+    },
+
+    /**
+     * Make an AJAX request, returning the raw XHR object along with the response
+     *
+     * @method raw
+     * @public
+     * @param {string} url The url to make a request to
+     * @param {Object} options The options for the request
+     * @return {Promise} The result of the request
+     */
+    raw(url, options) {
+      const hash = this.options(url, options);
+      return this._makeRequest(hash);
+    },
+
+    /**
+     * Shared method to actually make an AJAX request
+     *
+     * @method _makeRequest
+     * @private
+     * @param {Object} hash The options for the request
+     * @param {string} hash.url The URL to make the request to
+     * @return {Promise} The result of the request
+     */
+    _makeRequest(hash) {
+      const method = hash.method || hash.type || 'GET';
+      const requestData = { method, type: method, url: hash.url };
+
+      if (isJSONStringifyable(method, hash)) {
+        hash.data = JSON.stringify(hash.data);
+      }
+
+      pendingRequestCount = pendingRequestCount + 1;
+
+      const jqXHR = (0, _ajax.default)(hash);
+
+      const promise = new _promise.default((resolve, reject) => {
+        jqXHR.done((payload, textStatus, jqXHR) => {
+          const response = this.handleResponse(jqXHR.status, (0, _parseResponseHeaders.default)(jqXHR.getAllResponseHeaders()), payload, requestData);
+
+          if ((0, _errors.isAjaxError)(response)) {
+            Ember.run.join(null, reject, { payload, textStatus, jqXHR, response });
+          } else {
+            Ember.run.join(null, resolve, { payload, textStatus, jqXHR, response });
+          }
+        }).fail((jqXHR, textStatus, errorThrown) => {
+          Ember.runInDebug(function () {
+            const message = `The server returned an empty string for ${requestData.type} ${requestData.url}, which cannot be parsed into a valid JSON. Return either null or {}.`;
+            const validJSONString = !(textStatus === 'parsererror' && jqXHR.responseText === '');
+
+            (true && Ember.warn(message, validJSONString, {
+              id: 'ds.adapter.returned-empty-string-as-JSON'
+            }));
+          });
+
+          const payload = this.parseErrorResponse(jqXHR.responseText) || errorThrown;
+          let response;
+
+          if (errorThrown instanceof Error) {
+            response = errorThrown;
+          } else if (textStatus === 'timeout') {
+            response = new _errors.TimeoutError();
+          } else if (textStatus === 'abort') {
+            response = new _errors.AbortError();
+          } else {
+            response = this.handleResponse(jqXHR.status, (0, _parseResponseHeaders.default)(jqXHR.getAllResponseHeaders()), payload, requestData);
+          }
+
+          Ember.run.join(null, reject, { payload, textStatus, jqXHR, errorThrown, response });
+        }).always(() => {
+          pendingRequestCount = pendingRequestCount - 1;
+        });
+      }, `ember-ajax: ${hash.type} ${hash.url}`);
+
+      promise.xhr = jqXHR;
+
+      return promise;
+    },
+
+    /**
+     * calls `request()` but forces `options.type` to `POST`
+     *
+     * @method post
+     * @public
+     * @param {string} url The url to make a request to
+     * @param {Object} options The options for the request
+     * @return {Promise} The result of the request
+     */
+    post(url, options) {
+      return this.request(url, this._addTypeToOptionsFor(options, 'POST'));
+    },
+
+    /**
+     * calls `request()` but forces `options.type` to `PUT`
+     *
+     * @method put
+     * @public
+     * @param {string} url The url to make a request to
+     * @param {Object} options The options for the request
+     * @return {Promise} The result of the request
+     */
+    put(url, options) {
+      return this.request(url, this._addTypeToOptionsFor(options, 'PUT'));
+    },
+
+    /**
+     * calls `request()` but forces `options.type` to `PATCH`
+     *
+     * @method patch
+     * @public
+     * @param {string} url The url to make a request to
+     * @param {Object} options The options for the request
+     * @return {Promise} The result of the request
+     */
+    patch(url, options) {
+      return this.request(url, this._addTypeToOptionsFor(options, 'PATCH'));
+    },
+
+    /**
+     * calls `request()` but forces `options.type` to `DELETE`
+     *
+     * @method del
+     * @public
+     * @param {string} url The url to make a request to
+     * @param {Object} options The options for the request
+     * @return {Promise} The result of the request
+     */
+    del(url, options) {
+      return this.request(url, this._addTypeToOptionsFor(options, 'DELETE'));
+    },
+
+    /**
+     * calls `request()` but forces `options.type` to `DELETE`
+     *
+     * Alias for `del()`
+     *
+     * @method delete
+     * @public
+     * @param {string} url The url to make a request to
+     * @param {Object} options The options for the request
+     * @return {Promise} The result of the request
+     */
+    delete() {
+      return this.del(...arguments);
+    },
+
+    /**
+     * Wrap the `.get` method so that we issue a warning if
+     *
+     * Since `.get` is both an AJAX pattern _and_ an Ember pattern, we want to try
+     * to warn users when they try using `.get` to make a request
+     *
+     * @method get
+     * @public
+     */
+    get(url) {
+      if (arguments.length > 1 || url.indexOf('/') !== -1) {
+        throw new Ember.Error('It seems you tried to use `.get` to make a request! Use the `.request` method instead.');
+      }
+      return this._super(...arguments);
+    },
+
+    /**
+     * Manipulates the options hash to include the HTTP method on the type key
+     *
+     * @method _addTypeToOptionsFor
+     * @private
+     * @param {Object} options The original request options
+     * @param {string} method The method to enforce
+     * @return {Object} The new options, with the method set
+     */
+    _addTypeToOptionsFor(options, method) {
+      options = options || {};
+      options.type = method;
+      return options;
+    },
+
+    /**
+     * Get the full "headers" hash, combining the service-defined headers with
+     * the ones provided for the request
+     *
+     * @method _getFullHeadersHash
+     * @private
+     * @param {Object} headers
+     * @return {Object}
+     */
+    _getFullHeadersHash(headers) {
+      const classHeaders = Ember.get(this, 'headers');
+      const _headers = Ember.merge({}, classHeaders);
+      return Ember.merge(_headers, headers);
+    },
+
+    /**
+     * @method options
+     * @private
+     * @param {string} url
+     * @param {Object} options
+     * @return {Object}
+     */
+    options(url, options = {}) {
+      options = Ember.merge({}, options);
+      options.url = this._buildURL(url, options);
+      options.type = options.type || 'GET';
+      options.dataType = options.dataType || 'json';
+      options.contentType = Ember.isEmpty(options.contentType) ? Ember.get(this, 'contentType') : options.contentType;
+
+      if (this._shouldSendHeaders(options)) {
+        options.headers = this._getFullHeadersHash(options.headers);
+      } else {
+        options.headers = options.headers || {};
+      }
+
+      return options;
+    },
+
+    /**
+     * Build a URL for a request
+     *
+     * If the provided `url` is deemed to be a complete URL, it will be returned
+     * directly.  If it is not complete, then the segment provided will be combined
+     * with the `host` and `namespace` options of the request class to create the
+     * full URL.
+     *
+     * @private
+     * @param {string} url the url, or url segment, to request
+     * @param {Object} [options={}] the options for the request being made
+     * @param {string} [options.host] the host to use for this request
+     * @returns {string} the URL to make a request to
+     */
+    _buildURL(url, options = {}) {
+      if ((0, _urlHelpers.isFullURL)(url)) {
+        return url;
+      }
+
+      const urlParts = [];
+
+      let host = options.host || Ember.get(this, 'host');
+      if (host) {
+        host = stripSlashes(host);
+      }
+      urlParts.push(host);
+
+      let namespace = options.namespace || Ember.get(this, 'namespace');
+      if (namespace) {
+        namespace = stripSlashes(namespace);
+        urlParts.push(namespace);
+      }
+
+      // If the URL has already been constructed (presumably, by Ember Data), then we should just leave it alone
+      const hasNamespaceRegex = new RegExp(`^(/)?${namespace}`);
+      if (hasNamespaceRegex.test(url)) {
+        return url;
+      }
+
+      // *Only* remove a leading slash -- we need to maintain a trailing slash for
+      // APIs that differentiate between it being and not being present
+      if (startsWithSlash(url)) {
+        url = removeLeadingSlash(url);
+      }
+      urlParts.push(url);
+
+      return urlParts.join('/');
+    },
+
+    /**
+     * Takes an ajax response, and returns the json payload or an error.
+     *
+     * By default this hook just returns the json payload passed to it.
+     * You might want to override it in two cases:
+     *
+     * 1. Your API might return useful results in the response headers.
+     *    Response headers are passed in as the second argument.
+     *
+     * 2. Your API might return errors as successful responses with status code
+     *    200 and an Errors text or object.
+     *
+     * @method handleResponse
+     * @private
+     * @param  {Number} status
+     * @param  {Object} headers
+     * @param  {Object} payload
+     * @param  {Object} requestData the original request information
+     * @return {Object | AjaxError} response
+     */
+    handleResponse(status, headers, payload, requestData) {
+      if (this.isSuccess(status, headers, payload)) {
+        return payload;
+      }
+
+      // Allow overriding of error payload
+      payload = this.normalizeErrorResponse(status, headers, payload);
+
+      return this._createCorrectError(status, headers, payload, requestData);
+    },
+
+    _createCorrectError(status, headers, payload, requestData) {
+      let error;
+
+      if (this.isUnauthorizedError(status, headers, payload)) {
+        error = new _errors.UnauthorizedError(payload);
+      } else if (this.isForbiddenError(status, headers, payload)) {
+        error = new _errors.ForbiddenError(payload);
+      } else if (this.isInvalidError(status, headers, payload)) {
+        error = new _errors.InvalidError(payload);
+      } else if (this.isBadRequestError(status, headers, payload)) {
+        error = new _errors.BadRequestError(payload);
+      } else if (this.isNotFoundError(status, headers, payload)) {
+        error = new _errors.NotFoundError(payload);
+      } else if (this.isAbortError(status, headers, payload)) {
+        error = new _errors.AbortError(payload);
+      } else if (this.isConflictError(status, headers, payload)) {
+        error = new _errors.ConflictError(payload);
+      } else if (this.isServerError(status, headers, payload)) {
+        error = new _errors.ServerError(payload, status);
+      } else {
+        const detailedMessage = this.generateDetailedMessage(status, headers, payload, requestData);
+
+        error = new _errors.AjaxError(payload, detailedMessage, status);
+      }
+
+      return error;
+    },
+
+    /**
+     * Match the host to a provided array of strings or regexes that can match to a host
+     *
+     * @method matchHosts
+     * @private
+     * @param {string} host the host you are sending too
+     * @param {RegExp | string} matcher a string or regex that you can match the host to.
+     * @returns {Boolean} if the host passed the matcher
+     */
+    _matchHosts(host, matcher) {
+      if (matcher.constructor === RegExp) {
+        return matcher.test(host);
+      } else if (typeof matcher === 'string') {
+        return matcher === host;
+      } else {
+        Logger.warn('trustedHosts only handles strings or regexes.', matcher, 'is neither.');
+        return false;
+      }
+    },
+
+    /**
+     * Determine whether the headers should be added for this request
+     *
+     * This hook is used to help prevent sending headers to every host, regardless
+     * of the destination, since this could be a security issue if authentication
+     * tokens are accidentally leaked to third parties.
+     *
+     * To avoid that problem, subclasses should utilize the `headers` computed
+     * property to prevent authentication from being sent to third parties, or
+     * implement this hook for more fine-grain control over when headers are sent.
+     *
+     * By default, the headers are sent if the host of the request matches the
+     * `host` property designated on the class.
+     *
+     * @method _shouldSendHeaders
+     * @private
+     * @property {Object} hash request options hash
+     * @returns {Boolean} whether or not headers should be sent
+     */
+    _shouldSendHeaders({ url, host }) {
+      url = url || '';
+      host = host || Ember.get(this, 'host') || '';
+
+      const trustedHosts = Ember.get(this, 'trustedHosts') || Ember.A();
+      const { hostname } = (0, _urlHelpers.parseURL)(url);
+
+      // Add headers on relative URLs
+      if (!(0, _urlHelpers.isFullURL)(url)) {
+        return true;
+      } else if (trustedHosts.find(matcher => this._matchHosts(hostname, matcher))) {
+        return true;
+      }
+
+      // Add headers on matching host
+      return (0, _urlHelpers.haveSameHost)(url, host);
+    },
+
+    /**
+     * Generates a detailed ("friendly") error message, with plenty
+     * of information for debugging (good luck!)
+     *
+     * @method generateDetailedMessage
+     * @private
+     * @param  {Number} status
+     * @param  {Object} headers
+     * @param  {Object} payload
+     * @param  {Object} requestData the original request information
+     * @return {Object} request information
+     */
+    generateDetailedMessage(status, headers, payload, requestData) {
+      let shortenedPayload;
+      const payloadContentType = (0, _getHeader.default)(headers, 'Content-Type') || 'Empty Content-Type';
+
+      if (payloadContentType.toLowerCase() === 'text/html' && payload.length > 250) {
+        shortenedPayload = '[Omitted Lengthy HTML]';
+      } else {
+        shortenedPayload = JSON.stringify(payload);
+      }
+
+      const requestDescription = `${requestData.type} ${requestData.url}`;
+      const payloadDescription = `Payload (${payloadContentType})`;
+
+      return [`Ember AJAX Request ${requestDescription} returned a ${status}`, payloadDescription, shortenedPayload].join('\n');
+    },
+
+    /**
+     * Default `handleResponse` implementation uses this hook to decide if the
+     * response is a an authorized error.
+     *
+     * @method isUnauthorizedError
+     * @private
+     * @param {Number} status
+     * @param {Object} headers
+     * @param {Object} payload
+     * @return {Boolean}
+     */
+    isUnauthorizedError(status) {
+      return (0, _errors.isUnauthorizedError)(status);
+    },
+
+    /**
+     * Default `handleResponse` implementation uses this hook to decide if the
+     * response is a forbidden error.
+     *
+     * @method isForbiddenError
+     * @private
+     * @param {Number} status
+     * @param {Object} headers
+     * @param {Object} payload
+     * @return {Boolean}
+     */
+    isForbiddenError(status) {
+      return (0, _errors.isForbiddenError)(status);
+    },
+
+    /**
+     * Default `handleResponse` implementation uses this hook to decide if the
+     * response is a an invalid error.
+     *
+     * @method isInvalidError
+     * @private
+     * @param {Number} status
+     * @param {Object} headers
+     * @param {Object} payload
+     * @return {Boolean}
+     */
+    isInvalidError(status) {
+      return (0, _errors.isInvalidError)(status);
+    },
+
+    /**
+     * Default `handleResponse` implementation uses this hook to decide if the
+     * response is a bad request error.
+     *
+     * @method isBadRequestError
+     * @private
+     * @param {Number} status
+     * @param {Object} headers
+     * @param {Object} payload
+     * @return {Boolean}
+     */
+    isBadRequestError(status) {
+      return (0, _errors.isBadRequestError)(status);
+    },
+
+    /**
+     * Default `handleResponse` implementation uses this hook to decide if the
+     * response is a "not found" error.
+     *
+     * @method isNotFoundError
+     * @private
+     * @param {Number} status
+     * @param {Object} headers
+     * @param {Object} payload
+     * @return {Boolean}
+     */
+    isNotFoundError(status) {
+      return (0, _errors.isNotFoundError)(status);
+    },
+
+    /**
+     * Default `handleResponse` implementation uses this hook to decide if the
+     * response is an "abort" error.
+     *
+     * @method isAbortError
+     * @private
+     * @param {Number} status
+     * @param {Object} headers
+     * @param {Object} payload
+     * @return {Boolean}
+     */
+    isAbortError(status) {
+      return (0, _errors.isAbortError)(status);
+    },
+
+    /**
+     * Default `handleResponse` implementation uses this hook to decide if the
+     * response is a "conflict" error.
+     *
+     * @method isConflictError
+     * @private
+     * @param {Number} status
+     * @param {Object} headers
+     * @param {Object} payload
+     * @return {Boolean}
+     */
+    isConflictError(status) {
+      return (0, _errors.isConflictError)(status);
+    },
+
+    /**
+     * Default `handleResponse` implementation uses this hook to decide if the
+     * response is a server error.
+     *
+     * @method isServerError
+     * @private
+     * @param {Number} status
+     * @param {Object} headers
+     * @param {Object} payload
+     * @return {Boolean}
+     */
+    isServerError(status) {
+      return (0, _errors.isServerError)(status);
+    },
+
+    /**
+     * Default `handleResponse` implementation uses this hook to decide if the
+     * response is a success.
+     *
+     * @method isSuccess
+     * @private
+     * @param {Number} status
+     * @param {Object} headers
+     * @param {Object} payload
+     * @return {Boolean}
+     */
+    isSuccess(status) {
+      return (0, _errors.isSuccess)(status);
+    },
+
+    /**
+     * @method parseErrorResponse
+     * @private
+     * @param {string} responseText
+     * @return {Object}
+     */
+    parseErrorResponse(responseText) {
+      try {
+        return JSON.parse(responseText);
+      } catch (e) {
+        return responseText;
+      }
+    },
+
+    /**
+     * Can be overwritten to allow re-formatting of error messages
+     *
+     * @method normalizeErrorResponse
+     * @private
+     * @param  {Number} status
+     * @param  {Object} headers
+     * @param  {Object} payload
+     * @return {*} error response
+     */
+    normalizeErrorResponse(status, headers, payload) {
+      return payload;
+    }
+  });
 });
 ;define('ember-ajax/mixins/ajax-support', ['exports'], function (exports) {
   'use strict';
@@ -62660,124 +63214,125 @@ createDeprecatedModule('resolver');
      * @public
      */
     ajaxService: Ember.inject.service('ajax'),
+
     /**
      * @property {string} host
      * @public
      */
     host: Ember.computed.alias('ajaxService.host'),
+
     /**
      * @property {string} namespace
      * @public
      */
     namespace: Ember.computed.alias('ajaxService.namespace'),
+
     /**
      * @property {object} headers
      * @public
      */
     headers: Ember.computed.alias('ajaxService.headers'),
-    ajax(url, _method, _options) {
-      // @ts-ignore
+
+    ajax(url) {
       const augmentedOptions = this.ajaxOptions(...arguments);
-      return Ember.get(this, 'ajaxService').request(url, augmentedOptions);
+
+      return this.get('ajaxService').request(url, augmentedOptions);
     }
   });
 });
 ;define('ember-ajax/mixins/legacy/normalize-error-response', ['exports', 'ember-ajax/-private/utils/is-string'], function (exports, _isString) {
-    'use strict';
+  'use strict';
 
-    Object.defineProperty(exports, "__esModule", {
-        value: true
-    });
+  Object.defineProperty(exports, "__esModule", {
+    value: true
+  });
 
-    function isObject(object) {
-        return typeof object === 'object';
+
+  function isObject(object) {
+    return typeof object === 'object';
+  }
+
+  exports.default = Ember.Mixin.create({
+    /**
+     * Normalize the error from the server into the same format
+     *
+     * The format we normalize to is based on the JSON API specification.  The
+     * return value should be an array of objects that match the format they
+     * describe. More details about the object format can be found
+     * [here](http://jsonapi.org/format/#error-objects)
+     *
+     * The basics of the format are as follows:
+     *
+     * ```javascript
+     * [
+     *   {
+     *     status: 'The status code for the error',
+     *     title: 'The human-readable title of the error'
+     *     detail: 'The human-readable details of the error'
+     *   }
+     * ]
+     * ```
+     *
+     * In cases where the server returns an array, then there should be one item
+     * in the array for each of the payload.  If your server returns a JSON API
+     * formatted payload already, it will just be returned directly.
+     *
+     * If your server returns something other than a JSON API format, it's
+     * suggested that you override this method to convert your own errors into the
+     * one described above.
+     *
+     * @method normalizeErrorResponse
+     * @private
+     * @param  {Number} status
+     * @param  {Object} headers
+     * @param  {Object} payload
+     * @return {Array} An array of JSON API-formatted error objects
+     */
+    normalizeErrorResponse(status, headers, payload) {
+      payload = Ember.isNone(payload) ? {} : payload;
+
+      if (Ember.isArray(payload.errors)) {
+        return payload.errors.map(function (error) {
+          if (isObject(error)) {
+            const ret = Ember.merge({}, error);
+            ret.status = `${error.status}`;
+            return ret;
+          } else {
+            return {
+              status: `${status}`,
+              title: error
+            };
+          }
+        });
+      } else if (Ember.isArray(payload)) {
+        return payload.map(function (error) {
+          if (isObject(error)) {
+            return {
+              status: `${status}`,
+              title: error.title || 'The backend responded with an error',
+              detail: error
+            };
+          } else {
+            return {
+              status: `${status}`,
+              title: `${error}`
+            };
+          }
+        });
+      } else if ((0, _isString.default)(payload)) {
+        return [{
+          status: `${status}`,
+          title: payload
+        }];
+      } else {
+        return [{
+          status: `${status}`,
+          title: payload.title || 'The backend responded with an error',
+          detail: payload
+        }];
+      }
     }
-    function isJsonApiErrorResponse(object) {
-        if (!isObject(object)) {
-            return false;
-        }
-        const payloadAsErrorResponse = object;
-        if (payloadAsErrorResponse.errors) {
-            return Ember.isArray(payloadAsErrorResponse.errors);
-        }
-        return false;
-    }
-    function isJsonApiErrorObjectArray(object) {
-        return Ember.isArray(object);
-    }
-    exports.default = Ember.Mixin.create({
-        /**
-         * Normalize the error from the server into the same format
-         *
-         * The format we normalize to is based on the JSON API specification.  The
-         * return value should be an array of objects that match the format they
-         * describe. More details about the object format can be found
-         * [here](http://jsonapi.org/format/#error-objects)
-         *
-         * The basics of the format are as follows:
-         *
-         * ```javascript
-         * [
-         *   {
-         *     status: 'The status code for the error',
-         *     title: 'The human-readable title of the error'
-         *     detail: 'The human-readable details of the error'
-         *   }
-         * ]
-         * ```
-         *
-         * In cases where the server returns an array, then there should be one item
-         * in the array for each of the payload.  If your server returns a JSON API
-         * formatted payload already, it will just be returned directly.
-         *
-         * If your server returns something other than a JSON API format, it's
-         * suggested that you override this method to convert your own errors into the
-         * one described above.
-         */
-        normalizeErrorResponse(status, _headers, payload) {
-            payload = Ember.isNone(payload) ? {} : payload;
-            if (isJsonApiErrorResponse(payload)) {
-                return payload.errors.map(function (error) {
-                    if (isObject(error)) {
-                        const ret = Ember.assign({}, error);
-                        ret.status = `${error.status}`;
-                        return ret;
-                    } else {
-                        return {
-                            status: `${status}`,
-                            title: error
-                        };
-                    }
-                });
-            } else if (isJsonApiErrorObjectArray(payload)) {
-                return payload.map(function (error) {
-                    if (isObject(error)) {
-                        return {
-                            status: `${status}`,
-                            title: error.title || 'The backend responded with an error',
-                            detail: error
-                        };
-                    } else {
-                        return {
-                            status: `${status}`,
-                            title: `${error}`
-                        };
-                    }
-                });
-            } else if ((0, _isString.default)(payload)) {
-                return [{
-                    status: `${status}`,
-                    title: payload
-                }];
-            } else {
-                return [{
-                    status: `${status}`,
-                    title: payload.title || 'The backend responded with an error',
-                    detail: payload
-                }];
-            }
-        }
-    });
+  });
 });
 ;define('ember-ajax/raw', ['exports', 'ember-ajax/ajax-request'], function (exports, _ajaxRequest) {
   'use strict';
@@ -62786,6 +63341,7 @@ createDeprecatedModule('resolver');
     value: true
   });
   exports.default = raw;
+
 
   /**
    * Same as `request` except it resolves an object with
@@ -62796,9 +63352,9 @@ createDeprecatedModule('resolver');
    *
    * @public
    */
-  function raw(url, options) {
+  function raw() {
     const ajax = new _ajaxRequest.default();
-    return ajax.raw(url, options);
+    return ajax.raw(...arguments);
   }
 });
 ;define('ember-ajax/request', ['exports', 'ember-ajax/ajax-request'], function (exports, _ajaxRequest) {
@@ -62809,15 +63365,20 @@ createDeprecatedModule('resolver');
   });
   exports.default = request;
 
+
   /**
    * Helper function that allows you to use the default `ember-ajax` to make
    * requests without using the service.
    *
+   * Note: Unlike `ic-ajax`'s `request` helper function, this will *not* return a
+   * jqXHR object in the error handler.  If you need jqXHR, you can use the `raw`
+   * function instead.
+   *
    * @public
    */
-  function request(url, options) {
+  function request() {
     const ajax = new _ajaxRequest.default();
-    return ajax.request(url, options);
+    return ajax.request(...arguments);
   }
 });
 ;define('ember-ajax/services/ajax', ['exports', 'ember-ajax/mixins/ajax-request'], function (exports, _ajaxRequest) {
@@ -62826,24 +63387,15 @@ createDeprecatedModule('resolver');
   Object.defineProperty(exports, "__esModule", {
     value: true
   });
-  exports.AjaxServiceClass = undefined;
-
-  const AjaxService = Ember.Service.extend(_ajaxRequest.default);
-  exports.default = AjaxService;
-
-  // DO NOT DELETE: this is how TypeScript knows how to look up your services.
-  class AjaxServiceClass extends AjaxService {}
-  exports.AjaxServiceClass = AjaxServiceClass;
+  exports.default = Ember.Service.extend(_ajaxRequest.default);
 });
-;define('ember-ajax/utils/ajax', ['exports'], function (exports) {
+;define('ember-ajax/utils/ajax', ['exports', 'ember-ajax/-private/utils/is-fastboot'], function (exports, _isFastboot) {
   'use strict';
 
   Object.defineProperty(exports, "__esModule", {
     value: true
   });
-
-  const ajax = typeof FastBoot === 'undefined' ? Ember.$.ajax : FastBoot.require('najax');
-  exports.default = ajax;
+  exports.default = _isFastboot.default ? najax : Ember.$.ajax;
 });
 ;define('ember-cli-app-version/initializer-factory', ['exports'], function (exports) {
   'use strict';
@@ -68498,9 +69050,6 @@ createDeprecatedModule('resolver');
     @constructor
     @param {DS.Model} internalModel The model to create a snapshot from
   */
-  /**
-    @module ember-data
-  */
   class Snapshot {
     constructor(internalModel, options = {}) {
       this.__attributes = null;
@@ -72472,10 +73021,6 @@ createDeprecatedModule('resolver');
   }
 
   /**
-    @module ember-data
-  */
-
-  /**
     A record array is an array that contains records of a certain modelName. The record
     array materializes records as needed when they are retrieved for the first
     time. You should not create record arrays yourself. Instead, an instance of
@@ -72787,10 +73332,6 @@ createDeprecatedModule('resolver');
       Ember.run.once(this, 'trigger', 'didLoad');
     }
   });
-
-  /**
-    @module ember-data
-  */
 
   /**
     @module ember-data
@@ -73155,10 +73696,6 @@ createDeprecatedModule('resolver');
       return !backburner.currentInstance && !backburner.hasTimers();
     });
   }
-
-  /**
-    @module ember-data
-  */
 
   var badIdFormatAssertion = '`id` passed to `findRecord()` has to be non-empty string or number';
   var emberRun$1 = Ember.run.backburner;
@@ -76136,10 +76673,6 @@ createDeprecatedModule('resolver');
   }
 
   /**
-    @module ember-data
-  */
-
-  /**
     `DS.hasMany` is used to define One-To-Many and Many-To-Many
     relationships on a [DS.Model](/api/data/classes/DS.Model.html).
 
@@ -76865,9 +77398,6 @@ createDeprecatedModule('resolver');
     @namespace DS
     @extends Ember.DataAdapter
     @private
-  */
-  /**
-    @module ember-data
   */
   var debugAdapter = Ember.DataAdapter.extend({
     getFilters() {
@@ -77872,10 +78402,8 @@ createDeprecatedModule('resolver');
 
       return this.ajax(url, 'PATCH', { data: data });
     }
-  }); /* global heimdall */
-  /**
-    @module ember-data
-  */
+  });
+
   exports.default = JSONAPIAdapter;
 });
 ;define('ember-data/adapters/rest', ['exports', 'ember-data/adapter', 'ember-data/-private'], function (exports, _adapter, _private) {
@@ -78149,12 +78677,6 @@ createDeprecatedModule('resolver');
     @extends DS.Adapter
     @uses DS.BuildURLMixin
   */
-  /* global heimdall */
-  /* globals najax */
-  /**
-    @module ember-data
-  */
-
   var RESTAdapter = _adapter.default.extend(_private.BuildURLMixin, {
     defaultSerializer: '-rest',
 
@@ -80280,9 +80802,7 @@ createDeprecatedModule('resolver');
         }
       }
     }
-  }); /**
-        @module ember-data
-      */
+  });
 
   if (true) {
     JSONAPISerializer.reopen({
@@ -81696,10 +82216,6 @@ createDeprecatedModule('resolver');
     @namespace DS
     @extends DS.JSONSerializer
   */
-  /**
-    @module ember-data
-  */
-
   var RESTSerializer = _json.default.extend({
     /**
      `keyForPolymorphicType` can be used to define a custom key when
@@ -82654,7 +83170,7 @@ createDeprecatedModule('resolver');
   Object.defineProperty(exports, "__esModule", {
     value: true
   });
-  exports.default = "3.4.2";
+  exports.default = "3.4.4";
 });
 ;define('ember-inflector/index', ['exports', 'ember-inflector/lib/system', 'ember-inflector/lib/ext/string'], function (exports, _system) {
   'use strict';
@@ -83361,7 +83877,7 @@ define("ember-resolver/features", [], function () {
     value: true
   });
   exports.ModuleRegistry = undefined;
-  /* globals requirejs, require */
+
 
   if (typeof requirejs.entries === 'undefined') {
     requirejs.entries = requirejs._eak_seen;
@@ -83403,16 +83919,18 @@ define("ember-resolver/features", [], function () {
     let prefix, type, name;
     let fullNameParts = fullName.split('@');
 
-    // HTMLBars uses helper:@content-helper which collides
-    // with ember-cli namespace detection.
-    // This will be removed in a future release of HTMLBars.
-    if (fullName !== 'helper:@content-helper' && fullNameParts.length === 2) {
+    if (fullNameParts.length === 2) {
       let prefixParts = fullNameParts[0].split(':');
 
       if (prefixParts.length === 2) {
-        prefix = prefixParts[1];
-        type = prefixParts[0];
-        name = fullNameParts[1];
+        if (prefixParts[1].length === 0) {
+          type = prefixParts[0];
+          name = `@${fullNameParts[1]}`;
+        } else {
+          prefix = prefixParts[1];
+          type = prefixParts[0];
+          name = fullNameParts[1];
+        }
       } else {
         let nameParts = fullNameParts[1].split(':');
 
@@ -83468,8 +83986,6 @@ define("ember-resolver/features", [], function () {
     }
   }
 
-  // Ember.DefaultResolver docs:
-  //   https://github.com/emberjs/ember.js/blob/master/packages/ember-application/lib/system/resolver.js
   const Resolver = Ember.Object.extend({
     resolveOther,
     parseName,
